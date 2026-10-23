@@ -1,17 +1,22 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
   createChapter,
+  createSection,
   createSubject,
   deleteChapter,
+  deleteSection,
   deleteSubject,
   getLibraryInfo,
   listChapters,
   listSubjects,
-  readChapter,
+  openChapter as openChapterApi,
+  readChapterExport,
   renameChapter,
   renameSubject,
+  setSectionTitle,
   usingBrowserFallback,
-  writeChapter,
+  writeSection,
+  type SectionInfo,
 } from "./lib/api";
 import { ConspectEditor } from "./components/ConspectEditor";
 import { ConspectBlocks } from "./lib/markdown";
@@ -25,6 +30,7 @@ type View =
       subject: string;
       chapter: string;
       mode: "read" | "edit";
+      sectionId: string;
     };
 
 function errMessage(e: unknown): string {
@@ -37,6 +43,7 @@ export default function App() {
   const [view, setView] = useState<View>({ kind: "subjects" });
   const [subjects, setSubjects] = useState<string[]>([]);
   const [chapters, setChapters] = useState<string[]>([]);
+  const [sections, setSections] = useState<SectionInfo[]>([]);
   const [content, setContent] = useState("");
   const [draft, setDraft] = useState("");
   const [editorReset, setEditorReset] = useState(0);
@@ -46,16 +53,14 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [renameValue, setRenameValue] = useState("");
-  const [renaming, setRenaming] = useState(false);
+  const [renaming, setRenaming] = useState<"chapter" | "section" | null>(null);
 
   async function refreshSubjects() {
-    const list = await listSubjects();
-    setSubjects(list);
+    setSubjects(await listSubjects());
   }
 
   async function refreshChapters(subject: string) {
-    const list = await listChapters(subject);
-    setChapters(list);
+    setChapters(await listChapters(subject));
   }
 
   useEffect(() => {
@@ -80,14 +85,14 @@ export default function App() {
       ? "subjects"
       : view.kind === "chapters"
         ? `chapters:${view.subject}`
-        : `chapter:${view.subject}:${view.chapter}:${view.mode}`;
+        : `chapter:${view.subject}:${view.chapter}:${view.sectionId}:${view.mode}`;
 
   useEffect(() => {
     setError(null);
     setNotice(null);
     setNewName("");
     setRenameValue("");
-    setRenaming(false);
+    setRenaming(null);
   }, [viewKey]);
 
   async function openSubject(subject: string) {
@@ -103,25 +108,57 @@ export default function App() {
     }
   }
 
+  function applySnapshot(
+    subject: string,
+    chapter: string,
+    snap: Awaited<ReturnType<typeof openChapterApi>>,
+    mode: "read" | "edit",
+  ) {
+    setSections(snap.sections);
+    setContent(snap.content);
+    setDraft(snap.content);
+    setEditorReset((n) => n + 1);
+    const openMode = mode === "edit" || !snap.content.trim() ? "edit" : mode;
+    setView({
+      kind: "chapter",
+      subject,
+      chapter,
+      mode: openMode,
+      sectionId: snap.activeId,
+    });
+  }
+
   async function openChapter(
     subject: string,
     chapter: string,
     mode: "read" | "edit" = "read",
+    sectionId?: string,
   ) {
     setBusy(true);
     setError(null);
     try {
-      const text = await readChapter(subject, chapter);
-      setContent(text);
-      setDraft(text);
-      setEditorReset((n) => n + 1);
-      const openMode = mode === "edit" || !text.trim() ? "edit" : mode;
-      setView({ kind: "chapter", subject, chapter, mode: openMode });
+      const snap = await openChapterApi(subject, chapter, sectionId);
+      applySnapshot(subject, chapter, snap, mode);
     } catch (e) {
       setError(errMessage(e));
     } finally {
       setBusy(false);
     }
+  }
+
+  async function switchSection(sectionId: string) {
+    if (view.kind !== "chapter") return;
+    if (sectionId === view.sectionId) return;
+    if (view.mode === "edit" && draft !== content) {
+      if (
+        !confirm(
+          "В разделе есть несохранённые правки. Переключить без сохранения?",
+        )
+      ) {
+        return;
+      }
+    }
+    await openChapter(view.subject, view.chapter, view.mode, sectionId);
   }
 
   async function onCreateSubject(e: FormEvent) {
@@ -159,15 +196,72 @@ export default function App() {
     }
   }
 
-  async function onSaveChapter() {
+  async function onSaveSection() {
     if (view.kind !== "chapter") return;
     setBusy(true);
     setError(null);
     try {
-      await writeChapter(view.subject, view.chapter, draft);
-      setContent(draft);
-      setNotice("Сохранено");
-      setView({ ...view, mode: "read" });
+      const snap = await writeSection(
+        view.subject,
+        view.chapter,
+        view.sectionId,
+        draft,
+      );
+      setSections(snap.sections);
+      setContent(snap.content);
+      setDraft(snap.content);
+      setNotice("Раздел сохранён");
+      setView({ ...view, mode: "read", sectionId: snap.activeId });
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onAddSection() {
+    if (view.kind !== "chapter") return;
+    if (view.mode === "edit" && draft !== content) {
+      if (
+        !confirm(
+          "В текущем разделе есть несохранённые правки. Создать новый без сохранения?",
+        )
+      ) {
+        return;
+      }
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const snap = await createSection(view.subject, view.chapter);
+      applySnapshot(view.subject, view.chapter, snap, "edit");
+      setNotice("Раздел создан — вставьте текст из Merlin");
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onDeleteActiveSection() {
+    if (view.kind !== "chapter") return;
+    const current = sections.find((s) => s.id === view.sectionId);
+    if (!current) return;
+    if (sections.length <= 1) {
+      setError("Нельзя удалить единственный раздел");
+      return;
+    }
+    if (!confirm(`Удалить раздел «${current.title}»?`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const snap = await deleteSection(
+        view.subject,
+        view.chapter,
+        view.sectionId,
+      );
+      applySnapshot(view.subject, view.chapter, snap, "read");
+      setNotice("Раздел удалён");
     } catch (err) {
       setError(errMessage(err));
     } finally {
@@ -181,7 +275,7 @@ export default function App() {
     setError(null);
     try {
       const next = await renameSubject(view.subject, renameValue);
-      setRenaming(false);
+      setRenaming(null);
       setView({ kind: "chapters", subject: next });
       await refreshSubjects();
       await refreshChapters(next);
@@ -203,9 +297,55 @@ export default function App() {
         view.chapter,
         renameValue,
       );
-      setRenaming(false);
+      setRenaming(null);
       setView({ ...view, chapter: next });
       setNotice("Глава переименована");
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onRenameSection() {
+    if (view.kind !== "chapter") return;
+    setBusy(true);
+    setError(null);
+    try {
+      const snap = await setSectionTitle(
+        view.subject,
+        view.chapter,
+        view.sectionId,
+        renameValue.trim() || null,
+      );
+      setSections(snap.sections);
+      setRenaming(null);
+      setNotice(
+        renameValue.trim()
+          ? "Своё название раздела сохранено"
+          : "Снова автоимя из первой строки",
+      );
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onResetSectionTitle() {
+    if (view.kind !== "chapter") return;
+    setBusy(true);
+    setError(null);
+    try {
+      const snap = await setSectionTitle(
+        view.subject,
+        view.chapter,
+        view.sectionId,
+        null,
+      );
+      setSections(snap.sections);
+      setRenaming(null);
+      setNotice("Название снова из первой строки текста");
     } catch (err) {
       setError(errMessage(err));
     } finally {
@@ -232,7 +372,7 @@ export default function App() {
 
   async function onDeleteChapter() {
     if (view.kind !== "chapter") return;
-    if (!confirm(`Удалить главу «${view.chapter}»?`)) return;
+    if (!confirm(`Удалить главу «${view.chapter}» со всеми разделами?`)) return;
     setBusy(true);
     setError(null);
     try {
@@ -249,14 +389,27 @@ export default function App() {
 
   async function onExport(format: "docx" | "pdf") {
     if (view.kind !== "chapter") return;
-    const markdown = view.mode === "edit" ? draft : content;
-    if (!markdown.trim()) {
-      setError("Нечего экспортировать — конспект пуст. Сначала вставьте и сохраните текст.");
-      return;
-    }
     setBusy(true);
     setError(null);
     try {
+      // Prefer saved chapter (all sections). Warn if current edit unsaved.
+      if (view.mode === "edit" && draft !== content) {
+        if (
+          !confirm(
+            "Есть несохранённые правки в текущем разделе. Экспортировать сохранённую версию главы?",
+          )
+        ) {
+          setBusy(false);
+          return;
+        }
+      }
+      const markdown = await readChapterExport(view.subject, view.chapter);
+      if (!markdown.trim()) {
+        setError(
+          "Нечего экспортировать — конспект пуст. Сначала вставьте и сохраните текст.",
+        );
+        return;
+      }
       const { exportChapter } = await import("./lib/export/saveExport");
       const result = await exportChapter({
         format,
@@ -280,6 +433,11 @@ export default function App() {
       setBusy(false);
     }
   }
+
+  const activeSection =
+    view.kind === "chapter"
+      ? sections.find((s) => s.id === view.sectionId)
+      : undefined;
 
   return (
     <div className="app-shell">
@@ -375,13 +533,13 @@ export default function App() {
             </div>
 
             <div className="toolbar">
-              {!renaming ? (
+              {renaming !== "chapter" ? (
                 <>
                   <button
                     type="button"
                     className="ghost"
                     onClick={() => {
-                      setRenaming(true);
+                      setRenaming("chapter");
                       setRenameValue(view.subject);
                     }}
                   >
@@ -413,7 +571,7 @@ export default function App() {
                   <button
                     type="button"
                     className="ghost"
-                    onClick={() => setRenaming(false)}
+                    onClick={() => setRenaming(null)}
                   >
                     Отмена
                   </button>
@@ -440,7 +598,8 @@ export default function App() {
 
             {chapters.length === 0 ? (
               <p className="empty-hint">
-                Глав ещё нет. Создайте главу и вставьте конспект из Merlin.
+                Глав ещё нет. Создайте главу и вставьте конспект из Merlin по
+                разделам.
               </p>
             ) : (
               <ul className="entity-list">
@@ -453,7 +612,7 @@ export default function App() {
                       disabled={busy}
                     >
                       <span className="entity-name">{chapter}</span>
-                      <span className="entity-meta">читать</span>
+                      <span className="entity-meta">открыть</span>
                     </button>
                   </li>
                 ))}
@@ -463,7 +622,7 @@ export default function App() {
         )}
 
         {view.kind === "chapter" && (
-          <section className="panel chapter-panel">
+          <section className="panel chapter-panel chapter-with-sections">
             <nav className="crumbs">
               <button
                 type="button"
@@ -506,17 +665,17 @@ export default function App() {
             </div>
 
             <div className="toolbar">
-              {!renaming ? (
+              {renaming !== "chapter" ? (
                 <>
                   <button
                     type="button"
                     className="ghost"
                     onClick={() => {
-                      setRenaming(true);
+                      setRenaming("chapter");
                       setRenameValue(view.chapter);
                     }}
                   >
-                    Переименовать
+                    Переименовать главу
                   </button>
                   <button
                     type="button"
@@ -524,7 +683,7 @@ export default function App() {
                     onClick={onDeleteChapter}
                     disabled={busy}
                   >
-                    Удалить
+                    Удалить главу
                   </button>
                   <span className="toolbar-gap" aria-hidden="true" />
                   <button
@@ -532,7 +691,7 @@ export default function App() {
                     className="ghost"
                     onClick={() => onExport("docx")}
                     disabled={busy}
-                    title="Сохранить главу как Word (.docx)"
+                    title="Вся глава (все разделы) в Word"
                   >
                     Экспорт в DOCX
                   </button>
@@ -541,7 +700,7 @@ export default function App() {
                     className="ghost"
                     onClick={() => onExport("pdf")}
                     disabled={busy}
-                    title="Сохранить главу как PDF для печати"
+                    title="Вся глава (все разделы) в PDF"
                   >
                     Экспорт в PDF
                   </button>
@@ -563,7 +722,7 @@ export default function App() {
                   <button
                     type="button"
                     className="ghost"
-                    onClick={() => setRenaming(false)}
+                    onClick={() => setRenaming(null)}
                   >
                     Отмена
                   </button>
@@ -571,47 +730,155 @@ export default function App() {
               )}
             </div>
 
-            {view.mode === "read" ? (
-              <article className="reader" aria-label="Конспект">
-                <ConspectBlocks content={content} />
-              </article>
-            ) : (
-              <div className="editor">
-                <p className="editor-hint">
-                  Вставьте текст из Merlin или правьте структуру: заголовки,
-                  абзацы, <strong>жирный</strong>, <em>курсив</em>, таблицы.
-                  На диске сохраняется обычный Markdown (GFM). Enter — новый
-                  абзац; Backspace в начале — склеить с предыдущим.
-                </p>
-                <ConspectEditor
-                  resetKey={`${view.subject}/${view.chapter}/${editorReset}`}
-                  initialMarkdown={draft}
-                  onChangeMarkdown={setDraft}
-                  disabled={busy}
-                />
-                <div className="editor-actions">
+            <div className="chapter-layout">
+              <aside className="sections-rail" aria-label="Разделы">
+                <div className="sections-rail-head">
+                  <h2 className="sections-title">Разделы</h2>
                   <button
                     type="button"
-                    onClick={onSaveChapter}
+                    className="ghost compact"
+                    onClick={onAddSection}
                     disabled={busy}
                   >
-                    Сохранить
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() => {
-                      setDraft(content);
-                      setEditorReset((n) => n + 1);
-                      setView({ ...view, mode: "read" });
-                    }}
-                    disabled={busy}
-                  >
-                    Отмена
+                    + Раздел
                   </button>
                 </div>
+                <p className="sections-hint">
+                  Имя = первая строка текста, пока вы не зададите своё.
+                </p>
+                <ul className="section-list">
+                  {sections.map((section) => (
+                    <li key={section.id}>
+                      <button
+                        type="button"
+                        className={
+                          section.id === view.sectionId
+                            ? "section-btn active"
+                            : "section-btn"
+                        }
+                        onClick={() => switchSection(section.id)}
+                        disabled={busy}
+                      >
+                        <span className="section-btn-title">
+                          {section.title}
+                        </span>
+                        {section.titleIsCustom && (
+                          <span className="section-badge">своё</span>
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </aside>
+
+              <div className="section-main">
+                <div className="section-toolbar">
+                  <p className="section-current">
+                    Раздел: <strong>{activeSection?.title ?? "…"}</strong>
+                  </p>
+                  {renaming !== "section" ? (
+                    <div className="section-actions">
+                      <button
+                        type="button"
+                        className="ghost compact"
+                        onClick={() => {
+                          setRenaming("section");
+                          setRenameValue(
+                            activeSection?.titleIsCustom
+                              ? activeSection.title
+                              : "",
+                          );
+                        }}
+                        disabled={busy}
+                      >
+                        Название…
+                      </button>
+                      {activeSection?.titleIsCustom && (
+                        <button
+                          type="button"
+                          className="ghost compact"
+                          onClick={onResetSectionTitle}
+                          disabled={busy}
+                        >
+                          Автоимя
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="ghost compact danger"
+                        onClick={onDeleteActiveSection}
+                        disabled={busy || sections.length <= 1}
+                      >
+                        Удалить
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="inline-rename">
+                      <input
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        placeholder="Своё название (пусто = авто)"
+                        aria-label="Название раздела"
+                      />
+                      <button
+                        type="button"
+                        onClick={onRenameSection}
+                        disabled={busy}
+                      >
+                        ОК
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => setRenaming(null)}
+                      >
+                        Отмена
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {view.mode === "read" ? (
+                  <article className="reader" aria-label="Конспект">
+                    <ConspectBlocks content={content} />
+                  </article>
+                ) : (
+                  <div className="editor">
+                    <p className="editor-hint">
+                      Вставьте сюда один раздел из Merlin. Первая строка станет
+                      названием в списке слева (если нет своего имени).
+                    </p>
+                    <ConspectEditor
+                      resetKey={`${view.subject}/${view.chapter}/${view.sectionId}/${editorReset}`}
+                      initialMarkdown={draft}
+                      onChangeMarkdown={setDraft}
+                      disabled={busy}
+                    />
+                    <div className="editor-actions">
+                      <button
+                        type="button"
+                        onClick={onSaveSection}
+                        disabled={busy}
+                      >
+                        Сохранить
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => {
+                          setDraft(content);
+                          setEditorReset((n) => n + 1);
+                          setView({ ...view, mode: "read" });
+                        }}
+                        disabled={busy}
+                      >
+                        Отмена
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
+            </div>
           </section>
         )}
       </main>

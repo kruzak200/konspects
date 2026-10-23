@@ -1,10 +1,10 @@
 import { useMemo } from "react";
-import { markdownToHtml } from "./markdownCodec";
+import { markdownToHtml, sanitizeChapterMarkdown } from "./markdownCodec";
 
 export function ConspectBlocks({ content }: { content: string }) {
   const trimmed = content.trim();
   const html = useMemo(
-    () => (trimmed ? markdownToHtml(trimmed) : ""),
+    () => (trimmed ? markdownToHtml(sanitizeChapterMarkdown(trimmed)) : ""),
     [trimmed],
   );
 

@@ -247,6 +247,40 @@ export default function App() {
     }
   }
 
+  async function onExport(format: "docx" | "pdf") {
+    if (view.kind !== "chapter") return;
+    const markdown = view.mode === "edit" ? draft : content;
+    if (!markdown.trim()) {
+      setError("Нечего экспортировать — конспект пуст. Сначала вставьте и сохраните текст.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const { exportChapter } = await import("./lib/export/saveExport");
+      const result = await exportChapter({
+        format,
+        markdown,
+        subject: view.subject,
+        chapter: view.chapter,
+      });
+      if ("path" in result) {
+        setNotice(`Экспорт сохранён: ${result.path}`);
+      } else {
+        setNotice(`Файл скачан: ${result.downloaded}`);
+      }
+    } catch (err) {
+      const msg = errMessage(err);
+      if (msg.includes("отменён") || msg.toLowerCase().includes("cancel")) {
+        setNotice(null);
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="app-shell">
       <div className="atmosphere" aria-hidden="true" />
@@ -491,6 +525,25 @@ export default function App() {
                     disabled={busy}
                   >
                     Удалить
+                  </button>
+                  <span className="toolbar-gap" aria-hidden="true" />
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => onExport("docx")}
+                    disabled={busy}
+                    title="Сохранить главу как Word (.docx)"
+                  >
+                    Экспорт в DOCX
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => onExport("pdf")}
+                    disabled={busy}
+                    title="Сохранить главу как PDF для печати"
+                  >
+                    Экспорт в PDF
                   </button>
                 </>
               ) : (

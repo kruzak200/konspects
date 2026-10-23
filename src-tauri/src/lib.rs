@@ -225,9 +225,33 @@ fn write_chapter(
     fs::write(&path, content).map_err(|e| format!("Не удалось сохранить: {e}"))
 }
 
+/// Write an exported file (DOCX/PDF) chosen via the native save dialog.
+#[tauri::command]
+fn write_export_file(path: String, data_base64: String) -> Result<(), String> {
+    use base64::Engine;
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Путь не задан".into());
+    }
+    let lower = trimmed.to_lowercase();
+    if !(lower.ends_with(".docx") || lower.ends_with(".pdf")) {
+        return Err("Можно сохранять только .docx или .pdf".into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.as_bytes())
+        .map_err(|e| format!("Не удалось прочитать данные экспорта: {e}"))?;
+    if let Some(parent) = Path::new(trimmed).parent() {
+        if !parent.as_os_str().is_empty() {
+            ensure_dir(parent)?;
+        }
+    }
+    fs::write(trimmed, bytes).map_err(|e| format!("Не удалось сохранить файл: {e}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_library_info,
             list_subjects,
@@ -240,6 +264,7 @@ pub fn run() {
             delete_chapter,
             read_chapter,
             write_chapter,
+            write_export_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -358,57 +358,92 @@ button:disabled {
   padding: 0.35rem 0.15rem 0.5rem;
 }
 
-.reader-blocks {
-  display: grid;
-  gap: 0.95rem;
-}
-
-.reader-h1,
-.reader-h2,
-.reader-h3 {
-  margin: 0.55rem 0 0;
-  font-family: var(--font-read);
-  letter-spacing: -0.01em;
-  line-height: 1.25;
-}
-
-.reader-h1 {
-  font-size: 1.65rem;
-}
-
-.reader-h2 {
-  font-size: 1.3rem;
-  color: color-mix(in srgb, var(--ink) 88%, var(--sea));
-}
-
-.reader-h3 {
-  font-size: 1.12rem;
-  color: var(--ink-soft);
-}
-
-.reader-p {
-  margin: 0;
-  max-width: 42rem;
-  font-family: var(--font-read);
-  font-size: 1.08rem;
-  line-height: 1.65;
-}
-
-.reader-list {
-  margin: 0;
-  padding: 0 0 0 1.15rem;
-  display: grid;
-  gap: 0.45rem;
-  max-width: 42rem;
-  font-family: var(--font-read);
-  font-size: 1.05rem;
-  line-height: 1.5;
-}
-
 .reader-empty {
   margin: 0;
   color: var(--ink-soft);
   line-height: 1.5;
+}
+
+.conspect-prose {
+  font-family: var(--font-read);
+  font-size: 1.08rem;
+  line-height: 1.65;
+  color: var(--ink);
+  max-width: 42rem;
+}
+
+.conspect-prose > * + * {
+  margin-top: 0.9rem;
+}
+
+.conspect-prose h1,
+.conspect-prose h2,
+.conspect-prose h3 {
+  margin: 0.7rem 0 0;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  font-weight: 700;
+}
+
+.conspect-prose h1 {
+  font-size: 1.65rem;
+}
+
+.conspect-prose h2 {
+  font-size: 1.3rem;
+  color: color-mix(in srgb, var(--ink) 88%, var(--sea));
+}
+
+.conspect-prose h3 {
+  font-size: 1.12rem;
+  color: var(--ink-soft);
+}
+
+.conspect-prose p {
+  margin: 0;
+}
+
+.conspect-prose ul,
+.conspect-prose ol {
+  margin: 0;
+  padding: 0 0 0 1.15rem;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.conspect-prose strong {
+  font-weight: 700;
+}
+
+.conspect-prose em {
+  font-style: italic;
+}
+
+.conspect-prose table,
+.conspect-table {
+  width: 100%;
+  max-width: 42rem;
+  border-collapse: collapse;
+  font-size: 0.98rem;
+  line-height: 1.4;
+  overflow: hidden;
+}
+
+.conspect-prose th,
+.conspect-prose td,
+.conspect-table th,
+.conspect-table td {
+  border: 1px solid var(--mist);
+  padding: 0.45rem 0.6rem;
+  vertical-align: top;
+  min-width: 4.5rem;
+}
+
+.conspect-prose th,
+.conspect-table th {
+  background: color-mix(in srgb, var(--sea-soft) 70%, white);
+  font-weight: 650;
+  text-align: left;
 }
 
 .editor {
@@ -420,14 +455,91 @@ button:disabled {
   margin: 0;
   color: var(--ink-soft);
   line-height: 1.45;
+  font-size: 0.92rem;
 }
 
-.editor textarea {
-  min-height: 340px;
-  resize: vertical;
-  line-height: 1.55;
-  font-family: var(--font-read);
-  font-size: 1.02rem;
+.rich-editor {
+  border: 1px solid var(--mist);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.78);
+  overflow: hidden;
+}
+
+.rich-editor.is-disabled {
+  opacity: 0.65;
+}
+
+.edit-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+  padding: 0.55rem 0.65rem;
+  border-bottom: 1px solid var(--mist);
+  background: color-mix(in srgb, var(--paper-deep) 55%, white);
+}
+
+.edit-tool {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  padding: 0.35rem 0.55rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.edit-tool:hover:not(:disabled) {
+  background: white;
+  border-color: var(--mist);
+}
+
+.edit-tool.is-active {
+  background: var(--sea-soft);
+  color: var(--sea-deep);
+  border-color: color-mix(in srgb, var(--sea) 30%, var(--mist));
+}
+
+.edit-tool-sep {
+  width: 1px;
+  height: 1.1rem;
+  margin: 0 0.15rem;
+  background: var(--mist);
+}
+
+.rich-editor .tiptap,
+.rich-editor .ProseMirror {
+  min-height: 320px;
+  padding: 1rem 1.05rem 1.25rem;
+  outline: none;
+}
+
+.rich-editor .ProseMirror p.is-editor-empty:first-child::before {
+  color: var(--ink-soft);
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  opacity: 0.75;
+}
+
+.rich-editor .ProseMirror .selectedCell::after {
+  background: color-mix(in srgb, var(--sea-soft) 55%, transparent);
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.rich-editor .ProseMirror td,
+.rich-editor .ProseMirror th {
+  position: relative;
+}
+
+.rich-editor .tableWrapper {
+  overflow-x: auto;
 }
 
 .sr-only {
@@ -483,7 +595,8 @@ button:disabled {
     animation: none;
   }
 
-  button:not(.linkish):not(.entity-btn):not(.ghost):hover:not(:disabled),
+  .create-row > button[type="submit"]:hover:not(:disabled),
+  .editor-actions > button:not(.ghost):hover:not(:disabled),
   .entity-btn:hover:not(:disabled) {
     transform: none;
   }

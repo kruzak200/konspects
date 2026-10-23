@@ -13,6 +13,7 @@ import {
   usingBrowserFallback,
   writeChapter,
 } from "./lib/api";
+import { ConspectEditor } from "./components/ConspectEditor";
 import { ConspectBlocks } from "./lib/markdown";
 import "./App.css";
 
@@ -38,6 +39,7 @@ export default function App() {
   const [chapters, setChapters] = useState<string[]>([]);
   const [content, setContent] = useState("");
   const [draft, setDraft] = useState("");
+  const [editorReset, setEditorReset] = useState(0);
   const [libraryPath, setLibraryPath] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -112,7 +114,9 @@ export default function App() {
       const text = await readChapter(subject, chapter);
       setContent(text);
       setDraft(text);
-      setView({ kind: "chapter", subject, chapter, mode });
+      setEditorReset((n) => n + 1);
+      const openMode = mode === "edit" || !text.trim() ? "edit" : mode;
+      setView({ kind: "chapter", subject, chapter, mode: openMode });
     } catch (e) {
       setError(errMessage(e));
     } finally {
@@ -458,10 +462,11 @@ export default function App() {
                   className={view.mode === "edit" ? "active" : ""}
                   onClick={() => {
                     setDraft(content);
+                    setEditorReset((n) => n + 1);
                     setView({ ...view, mode: "edit" });
                   }}
                 >
-                  Вставить
+                  Править
                 </button>
               </div>
             </div>
@@ -520,14 +525,15 @@ export default function App() {
             ) : (
               <div className="editor">
                 <p className="editor-hint">
-                  Вставьте сюда готовый конспект из Merlin. Сохраните — и он
-                  останется в файле главы на диске.
+                  Вставьте текст из Merlin или правьте структуру: заголовки,
+                  абзацы, <strong>жирный</strong>, <em>курсив</em>, таблицы.
+                  На диске сохраняется обычный Markdown (GFM). Enter — новый
+                  абзац; Backspace в начале — склеить с предыдущим.
                 </p>
-                <textarea
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  placeholder={"# Заголовок\n\nКороткий абзац…\n\n## Раздел\n\n- пункт\n- пункт"}
-                  spellCheck
+                <ConspectEditor
+                  resetKey={`${view.subject}/${view.chapter}/${editorReset}`}
+                  initialMarkdown={draft}
+                  onChangeMarkdown={setDraft}
                   disabled={busy}
                 />
                 <div className="editor-actions">
@@ -543,6 +549,7 @@ export default function App() {
                     className="ghost"
                     onClick={() => {
                       setDraft(content);
+                      setEditorReset((n) => n + 1);
                       setView({ ...view, mode: "read" });
                     }}
                     disabled={busy}

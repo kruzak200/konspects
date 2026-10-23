@@ -25,3 +25,12 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# macOS (Apple Silicon / newer Xcode): do NOT strip proc-macros / build scripts.
+# Cargo applies [profile.release] strip to them too; stripped .dylib macros then
+# fail to dlopen (mis-aligned LINKEDIT), and rustc reports a misleading
+# E0463 "can't find crate for `phf_macros`" (and similar). The final app binary
+# is still stripped by the parent profile — this only affects compile-time crates.
+[profile.release.build-override]
+strip = false
+opt-level = 0

@@ -1,3 +1,6 @@
+# Prefer a recent stable: Rust 1.99+ also avoids macOS proc-macro strip/dyld issues.
+# The durable project fix is [profile.release.build-override] strip = false in
+# src-tauri/Cargo.toml (works with older toolchains too).
 [toolchain]
-channel = "1.90"
+channel = "1.99"
 components = ["rustfmt", "clippy"]

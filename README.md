@@ -21,16 +21,17 @@ Compress in **Merlin** yourself → paste the finished conspect here → read of
 
 - macOS 12+ на Apple Silicon (M1–M4)
 - [Node.js 20+](https://nodejs.org/) (LTS)
-- [Rust](https://rustup.rs/) 1.90+ (нужен для Tauri; в репозитории есть `rust-toolchain.toml` — `rustup` подхватит сам)
+- [Rust](https://rustup.rs/) (нужен для Tauri; в репозитории `rust-toolchain.toml` просит **1.99** — `rustup` подхватит сам)
 - Xcode Command Line Tools: `xcode-select --install`
 
 ## Установка и запуск / Install & run
 
-В терминале:
+В терминале (скопируйте по очереди):
 
 ```bash
 git clone https://github.com/kruzak200/konspects.git
 cd konspects
+git checkout cursor/konspects-mvp-c221
 npm install
 ```
 
@@ -55,6 +56,30 @@ npm run tauri build
 (и `.dmg`, если сборка его создала)
 
 Можно перетащить `Konspects.app` в «Программы».
+
+### Если сборка на Mac падала с `phf_macros` / `can't find crate`
+
+Это уже исправлено в проекте (нельзя «strip»-ать proc-macros при release-сборке на новых macOS/Xcode).  
+Обновите код и пересоберите **с чистого target**:
+
+```bash
+cd konspects
+git fetch origin
+git checkout cursor/konspects-mvp-c221
+git pull origin cursor/konspects-mvp-c221
+rustup show
+npm install
+cd src-tauri
+cargo clean
+cd ..
+npm run tauri build
+```
+
+После успеха приложение будет здесь:
+
+`src-tauri/target/release/bundle/macos/Konspects.app`
+
+Не копируйте `.app` вручную, пока команда `npm run tauri build` не завершится без ошибок.
 
 ### Только фронтенд в браузере (удобно проверить UI)
 

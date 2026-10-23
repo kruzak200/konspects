@@ -21,7 +21,7 @@ Compress in **Merlin** yourself → paste the finished conspect here → read of
 
 - macOS 12+ на Apple Silicon (M1–M4)
 - [Node.js 20+](https://nodejs.org/) (LTS)
-- [Rust](https://rustup.rs/) (нужен для Tauri)
+- [Rust](https://rustup.rs/) 1.90+ (нужен для Tauri; в репозитории есть `rust-toolchain.toml` — `rustup` подхватит сам)
 - Xcode Command Line Tools: `xcode-select --install`
 
 ## Установка и запуск / Install & run

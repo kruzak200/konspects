@@ -105,11 +105,9 @@ fn new_section_id() -> String {
 }
 
 fn strip_simple_markup(s: &str) -> String {
-    let mut t = s.trim().to_string();
-    // Strip HTML tags if first line was saved as an aligned heading/paragraph.
     let mut out = String::new();
     let mut in_tag = false;
-    for ch in t.chars() {
+    for ch in s.chars() {
         match ch {
             '<' => in_tag = true,
             '>' => in_tag = false,
@@ -117,7 +115,13 @@ fn strip_simple_markup(s: &str) -> String {
             _ => {}
         }
     }
-    t = out;
+    let mut t = out
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"");
+    t = t.split_whitespace().collect::<Vec<_>>().join(" ");
     t = t.trim_start_matches('#').trim().to_string();
     if t.starts_with("**") && t.ends_with("**") && t.len() > 4 {
         t = t[2..t.len() - 2].trim().to_string();
@@ -125,13 +129,7 @@ fn strip_simple_markup(s: &str) -> String {
     t
 }
 
-fn auto_title_from_content(content: &str) -> String {
-    let line = content
-        .lines()
-        .map(|l| l.trim())
-        .find(|l| !l.is_empty())
-        .unwrap_or("");
-    let title = strip_simple_markup(line);
+fn clip_title(title: String) -> String {
     if title.is_empty() {
         "Без названия".into()
     } else if title.chars().count() > 80 {
@@ -140,6 +138,43 @@ fn auto_title_from_content(content: &str) -> String {
     } else {
         title
     }
+}
+
+fn auto_title_from_content(content: &str) -> String {
+    // Markdown ATX heading near the top
+    for line in content.lines().take(12) {
+        let trimmed = line.trim();
+        let hashes = trimmed.chars().take_while(|c| *c == '#').count();
+        if (1..=3).contains(&hashes) {
+            let rest = trimmed[hashes..].trim();
+            if !rest.is_empty() {
+                let t = strip_simple_markup(rest);
+                if !t.is_empty() {
+                    return clip_title(t);
+                }
+            }
+        }
+    }
+    // HTML heading block (may span lines after justify save)
+    if let Some(start) = content.find("<h") {
+        let slice = &content[start..];
+        if let Some(open_end) = slice.find('>') {
+            let after_open = &slice[open_end + 1..];
+            if let Some(close_rel) = after_open.to_lowercase().find("</h") {
+                let inner = &after_open[..close_rel];
+                let t = strip_simple_markup(inner);
+                if !t.is_empty() {
+                    return clip_title(t);
+                }
+            }
+        }
+    }
+    let line = content
+        .lines()
+        .map(|l| l.trim())
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    clip_title(strip_simple_markup(line))
 }
 
 fn list_dirs(path: &Path) -> Result<Vec<String>, String> {

@@ -383,11 +383,12 @@ button:disabled {
   line-height: 1.5;
 }
 
-/* Equal side margins: text column centered in the content pane */
+/* Fill the main pane beside «Разделы» — modest equal padding, not a skinny column */
 .text-column {
-  width: min(56rem, 100%);
-  margin-inline: auto;
-  padding-inline: clamp(0.75rem, 3vw, 2rem);
+  width: 100%;
+  max-width: none;
+  margin-inline: 0;
+  padding-inline: clamp(0.85rem, 1.6vw, 1.4rem);
   box-sizing: border-box;
 }
 

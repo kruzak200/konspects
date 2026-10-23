@@ -40,20 +40,40 @@ function newId(): string {
   return `s_${Date.now().toString(16)}_${Math.random().toString(16).slice(2, 8)}`;
 }
 
-function autoTitle(content: string): string {
-  const line =
-    content
-      .split("\n")
-      .map((l) => l.trim())
-      .find((l) => l.length > 0) ?? "";
-  let title = line
+function plainTitleText(raw: string): string {
+  let title = raw
     .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
     .replace(/^#+\s*/, "")
     .replace(/\s+/g, " ")
     .trim();
   if (title.startsWith("**") && title.endsWith("**") && title.length > 4) {
     title = title.slice(2, -2).trim();
   }
+  return title;
+}
+
+function autoTitle(content: string): string {
+  const mdHeading = content.match(/^#{1,3}\s+(.+)$/m);
+  if (mdHeading) {
+    const t = plainTitleText(mdHeading[1]);
+    if (t) return t.length > 80 ? `${[...t].slice(0, 77).join("")}…` : t;
+  }
+  const htmlHeading = content.match(/<h([1-3])\b[^>]*>([\s\S]*?)<\/h\1>/i);
+  if (htmlHeading) {
+    const t = plainTitleText(htmlHeading[2]);
+    if (t) return t.length > 80 ? `${[...t].slice(0, 77).join("")}…` : t;
+  }
+  const line =
+    content
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => l.length > 0) ?? "";
+  const title = plainTitleText(line);
   if (!title) return "Без названия";
   if ([...title].length > 80) return `${[...title].slice(0, 77).join("")}…`;
   return title;

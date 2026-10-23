@@ -94,6 +94,8 @@ npm run tauri build
 
 Потом снова откройте новое `Konspects.app` из `src-tauri/target/release/bundle/macos/`.
 
+Окно по умолчанию шире; зелёная кнопка macOS — развернуть / полный экран.
+
 ### Только фронтенд в браузере (удобно проверить UI)
 
 ```bash

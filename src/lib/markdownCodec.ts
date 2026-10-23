@@ -19,19 +19,41 @@ const turndown = new TurndownService({
 turndown.use(gfm);
 turndown.use(tables);
 
+/** Keep text-align so read/edit round-trips through Markdown. */
+turndown.addRule("alignedBlock", {
+  filter(node: HTMLElement) {
+    const tag = node.nodeName;
+    if (!["P", "H1", "H2", "H3"].includes(tag)) return false;
+    const align = (node.getAttribute("style") || "").match(
+      /text-align\s*:\s*(left|right|center|justify)/i,
+    );
+    return Boolean(align);
+  },
+  replacement(_content: string, node: HTMLElement) {
+    const match = (node.getAttribute("style") || "").match(
+      /text-align\s*:\s*(left|right|center|justify)/i,
+    );
+    const align = match?.[1]?.toLowerCase() ?? "left";
+    const tag = node.nodeName.toLowerCase();
+    // Keep inline HTML (<strong>, <em>) — not Markdown — inside the tag
+    // so marked/TipTap can load it again.
+    const inner = node.innerHTML.trim();
+    return `\n\n<${tag} style="text-align:${align}">${inner}</${tag}>\n\n`;
+  },
+});
+
 /**
  * TipTap wraps table cells in <p> and adds colgroup/styles — that breaks
  * turndown-plugin-gfm. Flatten cells so we get clean GFM pipe tables.
- * Pure string transforms (works in browser and Node).
+ * Preserve text-align on block elements.
  */
 function normalizeEditorHtml(html: string): string {
   let out = html;
   out = out.replace(/<colgroup[\s\S]*?<\/colgroup>/gi, "");
-  // Unwrap one or more <p>…</p> directly inside th/td (TipTap default).
   out = out.replace(
     /<(th|td)(\b[^>]*)>([\s\S]*?)<\/\1>/gi,
     (_full, tag: string, attrs: string, inner: string) => {
-      let cell = inner
+      const cell = inner
         .replace(/<\/?p\b[^>]*>/gi, " ")
         .replace(/\s+/g, " ")
         .trim();
@@ -41,7 +63,24 @@ function normalizeEditorHtml(html: string): string {
       return `<${tag}${cleanAttrs}>${cell}</${tag}>`;
     },
   );
-  out = out.replace(/\s(style|class)=["'][^"']*["']/gi, "");
+
+  out = out.replace(
+    /<(p|h1|h2|h3)(\b[^>]*)>/gi,
+    (_full, tag: string, attrs: string) => {
+      const styleMatch = attrs.match(/style=["']([^"']*)["']/i);
+      const align = styleMatch?.[1]?.match(
+        /text-align\s*:\s*(left|right|center|justify)/i,
+      )?.[1];
+      const cleaned = attrs
+        .replace(/\sstyle=["'][^"']*["']/gi, "")
+        .replace(/\sclass=["'][^"']*["']/gi, "");
+      if (align) {
+        return `<${tag}${cleaned} style="text-align:${align.toLowerCase()}">`;
+      }
+      return `<${tag}${cleaned}>`;
+    },
+  );
+
   return out;
 }
 
@@ -52,7 +91,7 @@ export function markdownToHtml(markdown: string): string {
   return marked.parse(trimmed, { async: false }) as string;
 }
 
-/** TipTap HTML → Markdown (GFM tables) for disk */
+/** TipTap HTML → Markdown (GFM tables + text-align) for disk */
 export function htmlToMarkdown(html: string): string {
   const normalized = normalizeEditorHtml(html || "");
   const md = turndown.turndown(normalized);

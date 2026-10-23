@@ -374,7 +374,7 @@ button:disabled {
 
 .reader {
   margin-top: 0.35rem;
-  padding: 0.35rem 0.15rem 0.5rem;
+  padding: 0.35rem 0;
 }
 
 .reader-empty {
@@ -383,17 +383,50 @@ button:disabled {
   line-height: 1.5;
 }
 
+/* Equal side margins: text column centered in the content pane */
+.text-column {
+  width: min(56rem, 100%);
+  margin-inline: auto;
+  padding-inline: clamp(0.75rem, 3vw, 2rem);
+  box-sizing: border-box;
+}
+
 .conspect-prose {
   font-family: var(--font-read);
   font-size: 1.08rem;
   line-height: 1.65;
   color: var(--ink);
-  /* Readable line length only — window/chrome may be full width */
-  max-width: min(42rem, 100%);
+  width: 100%;
+  max-width: none;
+  text-align: justify; /* book-like default; TipTap/HTML can override per block */
+  hyphens: auto;
+  -webkit-hyphens: auto;
 }
 
 .conspect-prose > * + * {
   margin-top: 0.9rem;
+}
+
+.conspect-prose p {
+  margin: 0;
+  text-wrap: pretty;
+  orphans: 3;
+  widows: 3;
+}
+
+.conspect-prose [style*="text-align: left"],
+.conspect-prose [style*="text-align:left"] {
+  text-align: left;
+}
+
+.conspect-prose [style*="text-align: center"],
+.conspect-prose [style*="text-align:center"] {
+  text-align: center;
+}
+
+.conspect-prose [style*="text-align: justify"],
+.conspect-prose [style*="text-align:justify"] {
+  text-align: justify;
 }
 
 .conspect-prose h1,
@@ -419,16 +452,13 @@ button:disabled {
   color: var(--ink-soft);
 }
 
-.conspect-prose p {
-  margin: 0;
-}
-
 .conspect-prose ul,
 .conspect-prose ol {
   margin: 0;
   padding: 0 0 0 1.15rem;
   display: grid;
   gap: 0.4rem;
+  text-align: left; /* lists stay readable when body is justified */
 }
 
 .conspect-prose strong {
@@ -442,11 +472,12 @@ button:disabled {
 .conspect-prose table,
 .conspect-table {
   width: 100%;
-  max-width: min(42rem, 100%);
+  max-width: 100%;
   border-collapse: collapse;
   font-size: 0.98rem;
   line-height: 1.4;
   overflow: hidden;
+  text-align: left;
 }
 
 .conspect-prose th,
@@ -656,11 +687,17 @@ button:disabled {
   background: var(--mist);
 }
 
+.rich-editor .text-column {
+  padding-block: 0.85rem 1.1rem;
+}
+
 .rich-editor .tiptap,
 .rich-editor .ProseMirror {
   min-height: 320px;
-  padding: 1rem 1.05rem 1.25rem;
+  padding: 0;
   outline: none;
+  width: 100%;
+  max-width: none;
 }
 
 .rich-editor .ProseMirror p.is-editor-empty:first-child::before {

@@ -1,11 +1,13 @@
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
+import TextAlign from "@tiptap/extension-text-align";
 import { Table } from "@tiptap/extension-table";
 import { TableRow } from "@tiptap/extension-table-row";
 import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { useEffect } from "react";
+import type { Editor } from "@tiptap/react";
 import { htmlToMarkdown, markdownToHtml } from "../lib/markdownCodec";
 
 type Props = {
@@ -48,6 +50,38 @@ function ToolSep() {
   return <span className="edit-tool-sep" aria-hidden="true" />;
 }
 
+/** Apply alignment to every paragraph/heading in the section (book-like). */
+function setDocumentAlign(
+  editor: Editor,
+  align: "left" | "center" | "justify",
+) {
+  const { state } = editor;
+  let tr = state.tr;
+  state.doc.descendants((node, pos) => {
+    if (node.type.name === "paragraph" || node.type.name === "heading") {
+      tr = tr.setNodeMarkup(pos, undefined, {
+        ...node.attrs,
+        textAlign: align,
+      });
+    }
+  });
+  editor.view.dispatch(tr);
+  editor.commands.focus();
+}
+
+function currentDocAlign(editor: Editor): string | null {
+  let found: string | null = null;
+  let mixed = false;
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === "paragraph" || node.type.name === "heading") {
+      const a = (node.attrs.textAlign as string) || "justify";
+      if (found === null) found = a;
+      else if (found !== a) mixed = true;
+    }
+  });
+  return mixed ? null : found;
+}
+
 export function ConspectEditor({
   resetKey,
   initialMarkdown,
@@ -63,6 +97,11 @@ export function ConspectEditor({
           code: false,
           blockquote: false,
           horizontalRule: false,
+        }),
+        TextAlign.configure({
+          types: ["heading", "paragraph"],
+          alignments: ["left", "center", "justify"],
+          defaultAlignment: "justify",
         }),
         Placeholder.configure({
           placeholder:
@@ -100,6 +139,7 @@ export function ConspectEditor({
   if (!editor) return null;
 
   const inTable = editor.isActive("table");
+  const docAlign = currentDocAlign(editor);
 
   return (
     <div className={`rich-editor${disabled ? " is-disabled" : ""}`}>
@@ -152,6 +192,28 @@ export function ConspectEditor({
           onClick={() =>
             editor.chain().focus().toggleHeading({ level: 3 }).run()
           }
+        />
+        <ToolSep />
+        <ToolBtn
+          label="По ширине"
+          title="Выровнять текст по ширине (как в книге)"
+          active={docAlign === "justify"}
+          disabled={disabled}
+          onClick={() => setDocumentAlign(editor, "justify")}
+        />
+        <ToolBtn
+          label="По левому"
+          title="По левому краю"
+          active={docAlign === "left"}
+          disabled={disabled}
+          onClick={() => setDocumentAlign(editor, "left")}
+        />
+        <ToolBtn
+          label="По центру"
+          title="По центру"
+          active={docAlign === "center"}
+          disabled={disabled}
+          onClick={() => setDocumentAlign(editor, "center")}
         />
         <ToolSep />
         <ToolBtn
@@ -209,7 +271,9 @@ export function ConspectEditor({
           </>
         )}
       </div>
-      <EditorContent editor={editor} />
+      <div className="text-column">
+        <EditorContent editor={editor} />
+      </div>
     </div>
   );
 }

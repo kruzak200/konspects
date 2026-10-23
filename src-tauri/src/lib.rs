@@ -104,17 +104,34 @@ fn new_section_id() -> String {
     format!("s_{t:x}_{r:x}")
 }
 
+fn strip_simple_markup(s: &str) -> String {
+    let mut t = s.trim().to_string();
+    // Strip HTML tags if first line was saved as an aligned heading/paragraph.
+    let mut out = String::new();
+    let mut in_tag = false;
+    for ch in t.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    t = out;
+    t = t.trim_start_matches('#').trim().to_string();
+    if t.starts_with("**") && t.ends_with("**") && t.len() > 4 {
+        t = t[2..t.len() - 2].trim().to_string();
+    }
+    t
+}
+
 fn auto_title_from_content(content: &str) -> String {
     let line = content
         .lines()
         .map(|l| l.trim())
         .find(|l| !l.is_empty())
         .unwrap_or("");
-    let mut title = line.trim_start_matches('#').trim().to_string();
-    // Strip simple emphasis markers for a cleaner label
-    if title.starts_with("**") && title.ends_with("**") && title.len() > 4 {
-        title = title[2..title.len() - 2].trim().to_string();
-    }
+    let title = strip_simple_markup(line);
     if title.is_empty() {
         "Без названия".into()
     } else if title.chars().count() > 80 {

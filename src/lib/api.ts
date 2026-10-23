@@ -46,7 +46,11 @@ function autoTitle(content: string): string {
       .split("\n")
       .map((l) => l.trim())
       .find((l) => l.length > 0) ?? "";
-  let title = line.replace(/^#+\s*/, "").trim();
+  let title = line
+    .replace(/<[^>]+>/g, " ")
+    .replace(/^#+\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (title.startsWith("**") && title.endsWith("**") && title.length > 4) {
     title = title.slice(2, -2).trim();
   }

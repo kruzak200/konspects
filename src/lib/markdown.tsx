@@ -17,9 +17,11 @@ export function ConspectBlocks({ content }: { content: string }) {
   }
 
   return (
-    <div
-      className="reader-blocks conspect-prose"
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <div className="text-column">
+      <div
+        className="reader-blocks conspect-prose"
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    </div>
   );
 }

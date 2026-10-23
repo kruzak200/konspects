@@ -846,7 +846,8 @@ export default function App() {
                   <div className="editor">
                     <p className="editor-hint">
                       Вставьте сюда один раздел из Merlin. Первая строка станет
-                      названием в списке слева (если нет своего имени).
+                      названием слева (если нет своего имени). Выравнивание:
+                      «По ширине» (как в книге), «По левому», «По центру».
                     </p>
                     <ConspectEditor
                       resetKey={`${view.subject}/${view.chapter}/${view.sectionId}/${editorReset}`}

@@ -12,8 +12,20 @@ import {
   TextRun,
   WidthType,
 } from "docx";
-import { parseExportBlocks, type ExportBlock, type InlineRun } from "./model";
+import {
+  parseExportBlocks,
+  type CellAlign,
+  type ExportBlock,
+  type ExportTableCell,
+  type InlineRun,
+} from "./model";
 import { docxImageType, resolveExportImage } from "./imageEmbed";
+
+function alignType(align: CellAlign) {
+  if (align === "center") return AlignmentType.CENTER;
+  if (align === "right") return AlignmentType.RIGHT;
+  return AlignmentType.LEFT;
+}
 
 function paragraphFromRuns(runs: InlineRun[], spacingAfter = 160): Paragraph {
   return new Paragraph({
@@ -56,9 +68,15 @@ function headingFromRuns(level: 1 | 2 | 3, runs: InlineRun[]): Paragraph {
   });
 }
 
-function cell(runs: InlineRun[], header = false): TableCell {
+function cell(
+  data: ExportTableCell,
+  header = false,
+  widthDxa = 2500,
+): TableCell {
   return new TableCell({
-    width: { size: 2500, type: WidthType.DXA },
+    width: { size: widthDxa, type: WidthType.DXA },
+    columnSpan: data.colspan > 1 ? data.colspan : undefined,
+    rowSpan: data.rowspan > 1 ? data.rowspan : undefined,
     borders: {
       top: { style: BorderStyle.SINGLE, size: 4, color: "C5D0C8" },
       bottom: { style: BorderStyle.SINGLE, size: 4, color: "C5D0C8" },
@@ -68,44 +86,65 @@ function cell(runs: InlineRun[], header = false): TableCell {
     shading: header ? { fill: "E3F0EC" } : undefined,
     children: [
       new Paragraph({
-        children: runs.map(
-          (run) =>
-            new TextRun({
-              text: run.text || " ",
-              bold: header || run.bold,
-              italics: run.italic,
-              size: 20,
-              font: "Calibri",
-            }),
-        ),
+        alignment: alignType(data.align),
+        children: data.runs.length
+          ? data.runs.map(
+              (run) =>
+                new TextRun({
+                  text: run.text || " ",
+                  bold: header || run.bold,
+                  italics: run.italic,
+                  size: 20,
+                  font: "Calibri",
+                }),
+            )
+          : [new TextRun({ text: " " })],
       }),
     ],
   });
 }
 
 function tableBlock(block: Extract<ExportBlock, { kind: "table" }>): Table {
-  const colCount = Math.max(
-    block.headers.length,
-    ...block.rows.map((r) => r.length),
+  const gridCols = Math.max(
+    block.headers.reduce((n, c) => n + c.colspan, 0),
+    ...block.rows.map((r) => r.reduce((n, c) => n + c.colspan, 0)),
     1,
   );
-  const pad = (cells: InlineRun[][]) => {
-    const copy = [...cells];
-    while (copy.length < colCount) copy.push([{ text: "" }]);
-    return copy.slice(0, colCount);
+  const totalWidth = 9000;
+  const shares =
+    block.colShares && block.colShares.length === gridCols
+      ? block.colShares
+      : Array.from({ length: gridCols }, () => 1);
+  const shareSum = shares.reduce((a, b) => a + b, 0) || gridCols;
+  const colWidths = shares.map((s) =>
+    Math.max(400, Math.round((s / shareSum) * totalWidth)),
+  );
+
+  const widthFor = (startCol: number, span: number) =>
+    colWidths.slice(startCol, startCol + span).reduce((a, b) => a + b, 0) ||
+    Math.round(totalWidth / gridCols);
+
+  const mapRow = (cells: ExportTableCell[], header: boolean) => {
+    let col = 0;
+    return cells.map((c) => {
+      const w = widthFor(col, c.colspan);
+      col += c.colspan;
+      return cell(c, header, w);
+    });
   };
 
   return new Table({
-    width: { size: 9000, type: WidthType.DXA },
+    width: { size: totalWidth, type: WidthType.DXA },
+    columnWidths: colWidths,
     rows: [
       new TableRow({
-        children: pad(block.headers).map((c) => cell(c, true)),
+        children: mapRow(block.headers, true),
         tableHeader: true,
       }),
       ...block.rows.map(
         (row) =>
           new TableRow({
-            children: pad(row).map((c) => cell(c, false)),
+            children: mapRow(row, false),
           }),
       ),
     ],

@@ -7,11 +7,27 @@ export type InlineRun = {
   italic?: boolean;
 };
 
+export type CellAlign = "left" | "center" | "right";
+
+export type ExportTableCell = {
+  runs: InlineRun[];
+  align: CellAlign;
+  colspan: number;
+  rowspan: number;
+  /** Relative width share when known (from colgroup / colwidth). */
+  widthShare?: number;
+};
+
 export type ExportBlock =
   | { kind: "heading"; level: 1 | 2 | 3; runs: InlineRun[] }
   | { kind: "paragraph"; runs: InlineRun[] }
   | { kind: "list"; ordered: boolean; items: InlineRun[][] }
-  | { kind: "table"; headers: InlineRun[][]; rows: InlineRun[][][] }
+  | {
+      kind: "table";
+      headers: ExportTableCell[];
+      rows: ExportTableCell[][];
+      colShares?: number[];
+    }
   | { kind: "image"; src: string; alt: string };
 
 function inlineRuns(tokens: Token[] | undefined): InlineRun[] {
@@ -68,9 +84,119 @@ function inlineRuns(tokens: Token[] | undefined): InlineRun[] {
   return runs.filter((r) => r.text.length > 0);
 }
 
-function cellRuns(cell: Tokens.TableCell): InlineRun[] {
-  if (cell.tokens?.length) return inlineRuns(cell.tokens);
-  return cell.text ? [{ text: cell.text }] : [{ text: "" }];
+function cellRuns(cell: Tokens.TableCell): ExportTableCell {
+  const runs = cell.tokens?.length
+    ? inlineRuns(cell.tokens)
+    : cell.text
+      ? [{ text: cell.text }]
+      : [{ text: "" }];
+  return { runs, align: "left", colspan: 1, rowspan: 1 };
+}
+
+function parseInlineHtml(html: string): InlineRun[] {
+  const plain = html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/?strong\b[^>]*>/gi, (m) => (m.startsWith("</") ? "\u0002" : "\u0001"))
+    .replace(/<\/?b\b[^>]*>/gi, (m) => (m.startsWith("</") ? "\u0002" : "\u0001"))
+    .replace(/<\/?em\b[^>]*>/gi, (m) => (m.startsWith("</") ? "\u0004" : "\u0003"))
+    .replace(/<\/?i\b[^>]*>/gi, (m) => (m.startsWith("</") ? "\u0004" : "\u0003"))
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"');
+
+  const runs: InlineRun[] = [];
+  let bold = false;
+  let italic = false;
+  let buf = "";
+  const flush = () => {
+    if (!buf) return;
+    runs.push({ text: buf, bold, italic });
+    buf = "";
+  };
+  for (const ch of plain) {
+    if (ch === "\u0001") {
+      flush();
+      bold = true;
+      continue;
+    }
+    if (ch === "\u0002") {
+      flush();
+      bold = false;
+      continue;
+    }
+    if (ch === "\u0003") {
+      flush();
+      italic = true;
+      continue;
+    }
+    if (ch === "\u0004") {
+      flush();
+      italic = false;
+      continue;
+    }
+    buf += ch;
+  }
+  flush();
+  return runs.length ? runs : [{ text: "" }];
+}
+
+function htmlCellAlign(el: Element): CellAlign {
+  const style = (el.getAttribute("style") || "").match(
+    /text-align\s*:\s*(left|center|right)/i,
+  )?.[1];
+  const attr = el.getAttribute("align");
+  const raw = (style || attr || "left").toLowerCase();
+  if (raw === "center" || raw === "right") return raw;
+  return "left";
+}
+
+function parseHtmlTable(html: string): Extract<ExportBlock, { kind: "table" }> | null {
+  if (typeof DOMParser === "undefined") return null;
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const table = doc.querySelector("table");
+  if (!table) return null;
+
+  const colShares = Array.from(table.querySelectorAll(":scope > colgroup > col")).map(
+    (col) => {
+      const style = col.getAttribute("style") || "";
+      const pct = style.match(/width\s*:\s*([\d.]+)\s*%/i)?.[1];
+      if (pct) return parseFloat(pct);
+      const px = style.match(/width\s*:\s*([\d.]+)\s*px/i)?.[1];
+      return px ? parseFloat(px) : 0;
+    },
+  );
+
+  const rows = Array.from(
+    table.querySelectorAll(":scope > tbody > tr, :scope > thead > tr, :scope > tr"),
+  );
+  if (!rows.length) return null;
+
+  const toCell = (el: Element): ExportTableCell => ({
+    runs: parseInlineHtml(el.innerHTML),
+    align: htmlCellAlign(el),
+    colspan: Math.max(1, parseInt(el.getAttribute("colspan") || "1", 10) || 1),
+    rowspan: Math.max(1, parseInt(el.getAttribute("rowspan") || "1", 10) || 1),
+  });
+
+  const first = rows[0];
+  const headers = Array.from(first.children)
+    .filter((c) => /^(TH|TD)$/i.test(c.tagName))
+    .map(toCell);
+  const bodyRows = rows.slice(1).map((tr) =>
+    Array.from(tr.children)
+      .filter((c) => /^(TH|TD)$/i.test(c.tagName))
+      .map(toCell),
+  );
+
+  return {
+    kind: "table",
+    headers,
+    rows: bodyRows,
+    colShares: colShares.some((w) => w > 0) ? colShares : undefined,
+  };
 }
 
 function pushParagraphOrImages(
@@ -111,7 +237,22 @@ function pushParagraphOrImages(
   flushText();
 }
 
-/** Parse Markdown into export-friendly blocks (incl. images). */
+function pushHtmlToken(raw: string, blocks: ExportBlock[]) {
+  const trimmed = raw.trim();
+  if (!trimmed) return;
+  if (/^<table\b/i.test(trimmed)) {
+    const table = parseHtmlTable(trimmed);
+    if (table) {
+      blocks.push(table);
+      return;
+    }
+  }
+  // Strip tags for unknown HTML islands
+  const text = trimmed.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  if (text) blocks.push({ kind: "paragraph", runs: [{ text }] });
+}
+
+/** Parse Markdown into export-friendly blocks (incl. images + HTML tables). */
 export function parseExportBlocks(markdown: string): ExportBlock[] {
   const cleaned = sanitizeChapterMarkdown(
     markdown.replace(/\r\n/g, "\n").trim() || "",
@@ -162,6 +303,11 @@ export function parseExportBlocks(markdown: string): ExportBlock[] {
         headers: t.header.map(cellRuns),
         rows: t.rows.map((row) => row.map(cellRuns)),
       });
+      continue;
+    }
+    if (token.type === "html") {
+      const t = token as Tokens.HTML;
+      pushHtmlToken(t.text || t.raw || "", blocks);
       continue;
     }
     if (token.type === "space") continue;

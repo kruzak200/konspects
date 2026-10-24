@@ -6,6 +6,7 @@ import {
   parseExportBlocks,
   runsToPlain,
   type ExportBlock,
+  type ExportTableCell,
   type InlineRun,
 } from "./model";
 import {
@@ -108,38 +109,48 @@ function drawTable(
   cur: Cursor,
   block: Extract<ExportBlock, { kind: "table" }>,
 ) {
-  const colCount = Math.max(
-    block.headers.length,
-    ...block.rows.map((r) => r.length),
+  const gridCols = Math.max(
+    block.headers.reduce((n, c) => n + c.colspan, 0),
+    ...block.rows.map((r) => r.reduce((n, c) => n + c.colspan, 0)),
     1,
   );
-  const colW = cur.maxW / colCount;
+  const shares =
+    block.colShares && block.colShares.length === gridCols
+      ? block.colShares
+      : Array.from({ length: gridCols }, () => 1);
+  const shareSum = shares.reduce((a, b) => a + b, 0) || gridCols;
+  const colWidths = shares.map((s) => (s / shareSum) * cur.maxW);
   const pad = 3;
   const rowH = 10;
-  const allRows: InlineRun[][][] = [block.headers, ...block.rows];
+  const allRows: ExportTableCell[][] = [block.headers, ...block.rows];
 
   for (let ri = 0; ri < allRows.length; ri++) {
     ensureSpace(doc, cur, rowH + 2);
-    const row = [...allRows[ri]];
-    while (row.length < colCount) row.push([{ text: "" }]);
     const y0 = cur.y;
-
-    for (let ci = 0; ci < colCount; ci++) {
-      const x0 = cur.margin + ci * colW;
+    let col = 0;
+    for (const cell of allRows[ri]) {
+      const span = Math.min(cell.colspan, gridCols - col);
+      const w = colWidths
+        .slice(col, col + span)
+        .reduce((a, b) => a + b, 0);
+      const x0 = cur.margin + colWidths.slice(0, col).reduce((a, b) => a + b, 0);
       doc.setDrawColor(180, 190, 184);
       if (ri === 0) {
         doc.setFillColor(227, 240, 236);
-        doc.rect(x0, y0 - 5, colW, rowH, "FD");
+        doc.rect(x0, y0 - 5, w, rowH, "FD");
       } else {
-        doc.rect(x0, y0 - 5, colW, rowH, "S");
+        doc.rect(x0, y0 - 5, w, rowH, "S");
       }
-      const text = runsToPlain(row[ci]).slice(0, 80);
+      const text = runsToPlain(cell.runs).slice(0, 80);
       doc.setFont(FONT, ri === 0 ? "bold" : "normal");
       doc.setFontSize(9);
       doc.setTextColor(28, 36, 48);
-      doc.text(text, x0 + pad, y0, {
-        maxWidth: colW - pad * 2,
-      });
+      const textW = doc.getTextWidth(text);
+      let tx = x0 + pad;
+      if (cell.align === "center") tx = x0 + Math.max(pad, (w - textW) / 2);
+      if (cell.align === "right") tx = x0 + Math.max(pad, w - pad - textW);
+      doc.text(text, tx, y0, { maxWidth: w - pad * 2 });
+      col += span;
     }
     cur.y = y0 + rowH + 2;
   }

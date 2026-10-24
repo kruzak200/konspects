@@ -472,13 +472,15 @@ button:disabled {
 
 .conspect-prose table,
 .conspect-table {
-  width: 100%;
-  max-width: 100%;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 0.98rem;
   line-height: 1.4;
   overflow: hidden;
-  text-align: left;
+  text-align: left; /* default: left-friendly, not centered */
 }
 
 .conspect-prose th,
@@ -488,14 +490,41 @@ button:disabled {
   border: 1px solid var(--mist);
   padding: 0.45rem 0.6rem;
   vertical-align: top;
-  min-width: 4.5rem;
+  min-width: 2.5rem;
+  text-align: left;
+  word-break: break-word;
+}
+
+.conspect-prose th[style*="text-align: center"],
+.conspect-prose td[style*="text-align: center"],
+.conspect-table th[style*="text-align: center"],
+.conspect-table td[style*="text-align: center"],
+.conspect-prose th[style*="text-align:center"],
+.conspect-prose td[style*="text-align:center"] {
+  text-align: center;
+}
+
+.conspect-prose th[style*="text-align: right"],
+.conspect-prose td[style*="text-align: right"],
+.conspect-table th[style*="text-align: right"],
+.conspect-table td[style*="text-align: right"],
+.conspect-prose th[style*="text-align:right"],
+.conspect-prose td[style*="text-align:right"] {
+  text-align: right;
 }
 
 .conspect-prose th,
 .conspect-table th {
   background: color-mix(in srgb, var(--sea-soft) 70%, white);
   font-weight: 650;
-  text-align: left;
+}
+
+.conspect-prose td p,
+.conspect-prose th p,
+.conspect-table td p,
+.conspect-table th p {
+  text-align: inherit; /* follow cell align, not section justify */
+  margin: 0;
 }
 
 .conspect-prose img,
@@ -734,7 +763,40 @@ button:disabled {
 }
 
 .rich-editor .tableWrapper {
+  width: 100%;
+  max-width: 100%;
   overflow-x: auto;
+}
+
+.rich-editor .tableWrapper table {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  table-layout: fixed;
+}
+
+/* Column resize handle (ProseMirror columnResizing) */
+.rich-editor .ProseMirror .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: color-mix(in srgb, var(--sea) 55%, transparent);
+  pointer-events: none;
+  z-index: 3;
+}
+
+.rich-editor .ProseMirror.resize-cursor {
+  cursor: col-resize;
+}
+
+.table-edit-hint {
+  margin: 0.35rem 0 0.15rem;
+  padding-inline: clamp(0.85rem, 1.6vw, 1.4rem);
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  line-height: 1.35;
 }
 
 .sr-only {

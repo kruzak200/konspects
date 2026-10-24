@@ -8,7 +8,6 @@ import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
 import Image from "@tiptap/extension-image";
 import { useEffect, useRef, useState } from "react";
-import type { Editor } from "@tiptap/react";
 import { htmlToMarkdown, markdownToHtml } from "../lib/markdownCodec";
 import {
   pickAndSaveImage,
@@ -16,6 +15,16 @@ import {
   resolveMarkdownImages,
   savePastedImage,
 } from "../lib/images";
+import {
+  FixedEdgeTableViewCtor,
+  canMergeCells,
+  canSplitCell,
+  currentCellAlign,
+  currentDocAlignOutsideTables,
+  setDocumentAlignOutsideTables,
+  setSelectedCellsAlign,
+} from "../lib/tableExtensions";
+import type { Editor } from "@tiptap/react";
 
 type ImageContext = {
   subject: string;
@@ -66,38 +75,6 @@ function ToolSep() {
   return <span className="edit-tool-sep" aria-hidden="true" />;
 }
 
-/** Apply alignment to every paragraph/heading in the section (book-like). */
-function setDocumentAlign(
-  editor: Editor,
-  align: "left" | "center" | "justify",
-) {
-  const { state } = editor;
-  let tr = state.tr;
-  state.doc.descendants((node, pos) => {
-    if (node.type.name === "paragraph" || node.type.name === "heading") {
-      tr = tr.setNodeMarkup(pos, undefined, {
-        ...node.attrs,
-        textAlign: align,
-      });
-    }
-  });
-  editor.view.dispatch(tr);
-  editor.commands.focus();
-}
-
-function currentDocAlign(editor: Editor): string | null {
-  let found: string | null = null;
-  let mixed = false;
-  editor.state.doc.descendants((node) => {
-    if (node.type.name === "paragraph" || node.type.name === "heading") {
-      const a = (node.attrs.textAlign as string) || "justify";
-      if (found === null) found = a;
-      else if (found !== a) mixed = true;
-    }
-  });
-  return mixed ? null : found;
-}
-
 function toDiskMarkdown(html: string, chapterPath: string | null): string {
   return relativizeMarkdownImages(htmlToMarkdown(html), chapterPath);
 }
@@ -116,6 +93,7 @@ export function ConspectEditor({
   errRef.current = onImageError;
   const editorRef = useRef<Editor | null>(null);
   const [imageBusy, setImageBusy] = useState(false);
+  const [, setTick] = useState(0);
 
   const editor = useEditor(
     {
@@ -138,6 +116,10 @@ export function ConspectEditor({
         }),
         Table.configure({
           resizable: true,
+          lastColumnResizable: false,
+          cellMinWidth: 48,
+          handleWidth: 6,
+          View: FixedEdgeTableViewCtor,
           HTMLAttributes: { class: "conspect-table" },
         }),
         TableRow,
@@ -158,6 +140,8 @@ export function ConspectEditor({
           toDiskMarkdown(ed.getHTML(), ctxRef.current.chapterPath),
         );
       },
+      onSelectionUpdate: () => setTick((n) => n + 1),
+      onTransaction: () => setTick((n) => n + 1),
       editorProps: {
         attributes: {
           class: "conspect-prose",
@@ -245,8 +229,11 @@ export function ConspectEditor({
   if (!editor) return null;
 
   const inTable = editor.isActive("table");
-  const docAlign = currentDocAlign(editor);
+  const docAlign = currentDocAlignOutsideTables(editor);
+  const cellAlign = currentCellAlign(editor);
   const toolsDisabled = disabled || imageBusy;
+  const mergeOk = inTable && canMergeCells(editor);
+  const splitOk = inTable && canSplitCell(editor);
 
   return (
     <div className={`rich-editor${disabled ? " is-disabled" : ""}`}>
@@ -269,7 +256,7 @@ export function ConspectEditor({
         <ToolBtn
           label="Абз"
           title="Обычный абзац"
-          active={editor.isActive("paragraph")}
+          active={editor.isActive("paragraph") && !inTable}
           disabled={toolsDisabled}
           onClick={() => editor.chain().focus().setParagraph().run()}
         />
@@ -301,28 +288,32 @@ export function ConspectEditor({
           }
         />
         <ToolSep />
-        <ToolBtn
-          label="По ширине"
-          title="Выровнять текст по ширине (как в книге)"
-          active={docAlign === "justify"}
-          disabled={toolsDisabled}
-          onClick={() => setDocumentAlign(editor, "justify")}
-        />
-        <ToolBtn
-          label="По левому"
-          title="По левому краю"
-          active={docAlign === "left"}
-          disabled={toolsDisabled}
-          onClick={() => setDocumentAlign(editor, "left")}
-        />
-        <ToolBtn
-          label="По центру"
-          title="По центру"
-          active={docAlign === "center"}
-          disabled={toolsDisabled}
-          onClick={() => setDocumentAlign(editor, "center")}
-        />
-        <ToolSep />
+        {!inTable && (
+          <>
+            <ToolBtn
+              label="По ширине"
+              title="Выровнять текст раздела по ширине (как в книге)"
+              active={docAlign === "justify"}
+              disabled={toolsDisabled}
+              onClick={() => setDocumentAlignOutsideTables(editor, "justify")}
+            />
+            <ToolBtn
+              label="По левому"
+              title="По левому краю (раздел)"
+              active={docAlign === "left"}
+              disabled={toolsDisabled}
+              onClick={() => setDocumentAlignOutsideTables(editor, "left")}
+            />
+            <ToolBtn
+              label="По центру"
+              title="По центру (раздел)"
+              active={docAlign === "center"}
+              disabled={toolsDisabled}
+              onClick={() => setDocumentAlignOutsideTables(editor, "center")}
+            />
+            <ToolSep />
+          </>
+        )}
         <ToolBtn
           label="• Список"
           title="Маркированный список"
@@ -345,6 +336,42 @@ export function ConspectEditor({
         />
         {inTable && (
           <>
+            <ToolSep />
+            <ToolBtn
+              label="Яч. слева"
+              title="Выровнять текст в ячейке по левому краю"
+              active={cellAlign === "left"}
+              disabled={toolsDisabled}
+              onClick={() => setSelectedCellsAlign(editor, "left")}
+            />
+            <ToolBtn
+              label="Яч. центр"
+              title="Выровнять текст в ячейке по центру"
+              active={cellAlign === "center"}
+              disabled={toolsDisabled}
+              onClick={() => setSelectedCellsAlign(editor, "center")}
+            />
+            <ToolBtn
+              label="Яч. справа"
+              title="Выровнять текст в ячейке по правому краю"
+              active={cellAlign === "right"}
+              disabled={toolsDisabled}
+              onClick={() => setSelectedCellsAlign(editor, "right")}
+            />
+            <ToolSep />
+            <ToolBtn
+              label="Объединить"
+              title="Объединить выделенные ячейки (как ластик в Word). Выделите несколько ячеек мышью"
+              disabled={toolsDisabled || !mergeOk}
+              onClick={() => editor.chain().focus().mergeCells().run()}
+            />
+            <ToolBtn
+              label="Разделить"
+              title="Разделить объединённую ячейку"
+              disabled={toolsDisabled || !splitOk}
+              onClick={() => editor.chain().focus().splitCell().run()}
+            />
+            <ToolSep />
             <ToolBtn
               label="+ряд"
               title="Добавить строку"
@@ -385,6 +412,12 @@ export function ConspectEditor({
           onClick={() => void insertImageFromFile()}
         />
       </div>
+      {inTable && (
+        <p className="table-edit-hint">
+          Таблица: тяните внутренние границы столбцов (внешние края не двигаются).
+          Чтобы объединить ячейки — выделите их мышью, затем «Объединить».
+        </p>
+      )}
       <div className="text-column">
         <EditorContent editor={editor} />
       </div>

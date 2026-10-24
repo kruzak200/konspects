@@ -498,6 +498,15 @@ button:disabled {
   text-align: left;
 }
 
+.conspect-prose img,
+.conspect-prose .conspect-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0.85rem 0;
+  border-radius: 6px;
+}
+
 .chapter-layout {
   display: grid;
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);

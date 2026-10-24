@@ -37,19 +37,19 @@ export async function exportChapter(opts: {
   markdown: string;
   subject: string;
   chapter: string;
+  chapterPath?: string | null;
 }): Promise<{ path: string } | { downloaded: string }> {
   const base = safeFilename(opts.chapter);
   const filename = `${base}.${opts.format}`;
+  const meta = {
+    subject: opts.subject,
+    chapter: opts.chapter,
+    chapterPath: opts.chapterPath ?? null,
+  };
   const bytes =
     opts.format === "docx"
-      ? await buildDocxBytes(opts.markdown, {
-          subject: opts.subject,
-          chapter: opts.chapter,
-        })
-      : await buildPdfBytes(opts.markdown, {
-          subject: opts.subject,
-          chapter: opts.chapter,
-        });
+      ? await buildDocxBytes(opts.markdown, meta)
+      : await buildPdfBytes(opts.markdown, meta);
 
   if (!isTauri()) {
     downloadInBrowser(

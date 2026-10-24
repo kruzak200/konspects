@@ -8,6 +8,12 @@ import {
   type ExportBlock,
   type InlineRun,
 } from "./model";
+import {
+  bytesToDataUri,
+  pdfImageFormat,
+  pdfSizeMm,
+  resolveExportImage,
+} from "./imageEmbed";
 
 const FONT = "DejaVuSans";
 
@@ -140,7 +146,12 @@ function drawTable(
   cur.y += 4;
 }
 
-function drawBlocks(doc: jsPDF, cur: Cursor, blocks: ExportBlock[]) {
+async function drawBlocks(
+  doc: jsPDF,
+  cur: Cursor,
+  blocks: ExportBlock[],
+  chapterPath: string | null,
+) {
   for (const block of blocks) {
     if (block.kind === "heading") {
       const sizes = { 1: 18, 2: 15, 3: 13 } as const;
@@ -175,13 +186,70 @@ function drawBlocks(doc: jsPDF, cur: Cursor, blocks: ExportBlock[]) {
     }
     if (block.kind === "table") {
       drawTable(doc, cur, block);
+      continue;
+    }
+    if (block.kind === "image") {
+      const img = await resolveExportImage(
+        block.src,
+        block.alt,
+        chapterPath,
+      );
+      if (!img) {
+        ensureSpace(doc, cur, 12);
+        doc.setFont(FONT, "italic");
+        doc.setFontSize(10);
+        doc.setTextColor(100, 100, 100);
+        doc.text(
+          block.alt ? `[картинка не найдена: ${block.alt}]` : "[картинка не найдена]",
+          cur.margin,
+          cur.y,
+        );
+        cur.y += 8;
+        doc.setTextColor(28, 36, 48);
+        continue;
+      }
+      const format = pdfImageFormat(img.mime);
+      const size = pdfSizeMm(img);
+      if (!format) {
+        ensureSpace(doc, cur, 12);
+        doc.setFont(FONT, "italic");
+        doc.setFontSize(10);
+        doc.setTextColor(100, 100, 100);
+        doc.text(
+          `[картинка пропущена в PDF: ${img.alt || "GIF"}]`,
+          cur.margin,
+          cur.y,
+        );
+        cur.y += 8;
+        doc.setTextColor(28, 36, 48);
+        continue;
+      }
+      ensureSpace(doc, cur, size.h + 6);
+      try {
+        doc.addImage(
+          bytesToDataUri(img.bytes, img.mime),
+          format,
+          cur.margin,
+          cur.y,
+          size.w,
+          size.h,
+        );
+        cur.y += size.h + 6;
+      } catch {
+        doc.setFont(FONT, "italic");
+        doc.setFontSize(10);
+        doc.setTextColor(100, 100, 100);
+        doc.text(`[не удалось вставить картинку: ${img.alt}]`, cur.margin, cur.y);
+        cur.y += 8;
+        doc.setTextColor(28, 36, 48);
+      }
     }
   }
 }
 
 export async function buildPdfBytes(
   markdown: string,
-  meta: { subject: string; chapter: string },
+  meta: { subject: string; chapter: string; chapterPath?: string | null },
 ): Promise<Uint8Array> {
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   await registerFonts(doc);
@@ -217,7 +285,7 @@ export async function buildPdfBytes(
     doc.setTextColor(100, 100, 100);
     doc.text("Пустой конспект", margin, cur.y);
   } else {
-    drawBlocks(doc, cur, blocks);
+    await drawBlocks(doc, cur, blocks, meta.chapterPath ?? null);
   }
 
   const output = doc.output("arraybuffer");

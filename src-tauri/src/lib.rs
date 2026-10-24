@@ -44,6 +44,15 @@ pub struct ChapterSnapshot {
     pub sections: Vec<SectionInfo>,
     pub active_id: String,
     pub content: String,
+    /// Absolute path to the chapter folder (for resolving image assets).
+    pub chapter_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedImage {
+    pub relative_path: String,
+    pub absolute_path: String,
 }
 
 fn library_root(app: &AppHandle) -> Result<PathBuf, String> {
@@ -140,10 +149,28 @@ fn clip_title(title: String) -> String {
     }
 }
 
+fn is_image_only_line(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() {
+        return true;
+    }
+    if t.starts_with("data:image/") {
+        return true;
+    }
+    if t.starts_with("![") && t.contains("](") && t.ends_with(')') {
+        return true;
+    }
+    let lower = t.to_lowercase();
+    lower.starts_with("<img") && lower.ends_with('>')
+}
+
 fn auto_title_from_content(content: &str) -> String {
     // Markdown ATX heading near the top
     for line in content.lines().take(12) {
         let trimmed = line.trim();
+        if is_image_only_line(trimmed) {
+            continue;
+        }
         let hashes = trimmed.chars().take_while(|c| *c == '#').count();
         if (1..=3).contains(&hashes) {
             let rest = trimmed[hashes..].trim();
@@ -172,7 +199,7 @@ fn auto_title_from_content(content: &str) -> String {
     let line = content
         .lines()
         .map(|l| l.trim())
-        .find(|l| !l.is_empty())
+        .find(|l| !l.is_empty() && !is_image_only_line(l))
         .unwrap_or("");
     clip_title(strip_simple_markup(line))
 }
@@ -342,6 +369,7 @@ fn snapshot_for(
         sections: infos,
         active_id: active,
         content,
+        chapter_path: dir.to_string_lossy().into_owned(),
     })
 }
 
@@ -594,6 +622,54 @@ fn read_chapter_export(
     Ok(parts.join("\n\n"))
 }
 
+/// Save an image into `Глава/assets/<section_id>/…` and return relative + absolute paths.
+#[tauri::command]
+fn save_section_image(
+    app: AppHandle,
+    subject: String,
+    chapter: String,
+    section_id: String,
+    data_base64: String,
+    extension: String,
+) -> Result<SavedImage, String> {
+    use base64::Engine;
+    let root = library_root(&app)?;
+    let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
+    let meta = read_meta(&dir)?;
+    if !meta.sections.iter().any(|s| s.id == section_id) {
+        return Err("Раздел не найден".into());
+    }
+    let ext = extension.trim().trim_start_matches('.').to_lowercase();
+    let allowed = ["png", "jpg", "jpeg", "webp", "gif"];
+    if !allowed.contains(&ext.as_str()) {
+        return Err("Поддерживаются PNG, JPEG, WebP и GIF".into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.as_bytes())
+        .map_err(|e| format!("Не удалось прочитать изображение: {e}"))?;
+    if bytes.is_empty() {
+        return Err("Пустое изображение".into());
+    }
+    // Hard cap after client-side resize (~8 MiB)
+    if bytes.len() > 8 * 1024 * 1024 {
+        return Err("Файл слишком большой (макс. ~8 МБ после сжатия)".into());
+    }
+    let assets = dir.join("assets").join(&section_id);
+    ensure_dir(&assets)?;
+    let t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let filename = format!("img_{t:x}.{ext}");
+    let abs = assets.join(&filename);
+    fs::write(&abs, &bytes).map_err(|e| format!("Не удалось сохранить картинку: {e}"))?;
+    let relative_path = format!("assets/{section_id}/{filename}");
+    Ok(SavedImage {
+        relative_path,
+        absolute_path: abs.to_string_lossy().into_owned(),
+    })
+}
+
 /// Write an exported file (DOCX/PDF) chosen via the native save dialog.
 #[tauri::command]
 fn write_export_file(path: String, data_base64: String) -> Result<(), String> {
@@ -637,6 +713,7 @@ pub fn run() {
             set_section_title,
             write_section,
             read_chapter_export,
+            save_section_image,
             write_export_file,
         ])
         .run(tauri::generate_context!())

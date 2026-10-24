@@ -46,6 +46,7 @@ export default function App() {
   const [sections, setSections] = useState<SectionInfo[]>([]);
   const [content, setContent] = useState("");
   const [draft, setDraft] = useState("");
+  const [chapterPath, setChapterPath] = useState("");
   const [editorReset, setEditorReset] = useState(0);
   const [libraryPath, setLibraryPath] = useState("");
   const [busy, setBusy] = useState(false);
@@ -117,6 +118,7 @@ export default function App() {
     setSections(snap.sections);
     setContent(snap.content);
     setDraft(snap.content);
+    setChapterPath(snap.chapterPath || "");
     setEditorReset((n) => n + 1);
     const openMode = mode === "edit" || !snap.content.trim() ? "edit" : mode;
     setView({
@@ -210,6 +212,7 @@ export default function App() {
       setSections(snap.sections);
       setContent(snap.content);
       setDraft(snap.content);
+      setChapterPath(snap.chapterPath || "");
       setNotice("Раздел сохранён");
       setView({ ...view, mode: "read", sectionId: snap.activeId });
     } catch (err) {
@@ -298,7 +301,8 @@ export default function App() {
         renameValue,
       );
       setRenaming(null);
-      setView({ ...view, chapter: next });
+      // Path on disk changes with the folder name — reopen for chapterPath.
+      await openChapter(view.subject, next, view.mode, view.sectionId);
       setNotice("Глава переименована");
     } catch (err) {
       setError(errMessage(err));
@@ -416,6 +420,7 @@ export default function App() {
         markdown,
         subject: view.subject,
         chapter: view.chapter,
+        chapterPath: chapterPath || null,
       });
       if ("path" in result) {
         setNotice(`Экспорт сохранён: ${result.path}`);
@@ -840,13 +845,17 @@ export default function App() {
 
                 {view.mode === "read" ? (
                   <article className="reader" aria-label="Конспект">
-                    <ConspectBlocks content={content} />
+                    <ConspectBlocks
+                      content={content}
+                      chapterPath={chapterPath || null}
+                    />
                   </article>
                 ) : (
                   <div className="editor">
                     <p className="editor-hint">
                       Вставьте сюда один раздел из Merlin. Первая строка станет
-                      названием слева (если нет своего имени). Выравнивание:
+                      названием слева (если нет своего имени). Картинка — кнопка
+                      «Картинка» или вставка из буфера (Cmd/Ctrl+V). Выравнивание:
                       «По ширине» (как в книге), «По левому», «По центру».
                     </p>
                     <ConspectEditor
@@ -854,6 +863,13 @@ export default function App() {
                       initialMarkdown={draft}
                       onChangeMarkdown={setDraft}
                       disabled={busy}
+                      imageContext={{
+                        subject: view.subject,
+                        chapter: view.chapter,
+                        sectionId: view.sectionId,
+                        chapterPath: chapterPath || null,
+                      }}
+                      onImageError={setError}
                     />
                     <div className="editor-actions">
                       <button

@@ -11,7 +11,8 @@ export type ExportBlock =
   | { kind: "heading"; level: 1 | 2 | 3; runs: InlineRun[] }
   | { kind: "paragraph"; runs: InlineRun[] }
   | { kind: "list"; ordered: boolean; items: InlineRun[][] }
-  | { kind: "table"; headers: InlineRun[][]; rows: InlineRun[][][] };
+  | { kind: "table"; headers: InlineRun[][]; rows: InlineRun[][][] }
+  | { kind: "image"; src: string; alt: string };
 
 function inlineRuns(tokens: Token[] | undefined): InlineRun[] {
   if (!tokens?.length) return [];
@@ -19,6 +20,7 @@ function inlineRuns(tokens: Token[] | undefined): InlineRun[] {
 
   const walk = (list: Token[], bold = false, italic = false) => {
     for (const token of list) {
+      if (token.type === "image") continue;
       if (token.type === "text") {
         const t = token as Tokens.Text;
         if (t.tokens?.length) {
@@ -71,7 +73,45 @@ function cellRuns(cell: Tokens.TableCell): InlineRun[] {
   return cell.text ? [{ text: cell.text }] : [{ text: "" }];
 }
 
-/** Parse Markdown into export-friendly blocks (headings, paragraphs, lists, tables). */
+function pushParagraphOrImages(
+  tokens: Token[] | undefined,
+  fallbackText: string,
+  blocks: ExportBlock[],
+) {
+  if (!tokens?.length) {
+    if (fallbackText.trim()) {
+      blocks.push({ kind: "paragraph", runs: [{ text: fallbackText }] });
+    }
+    return;
+  }
+
+  let buffer: Token[] = [];
+  const flushText = () => {
+    if (!buffer.length) return;
+    const runs = inlineRuns(buffer);
+    if (runs.some((r) => r.text.trim())) {
+      blocks.push({ kind: "paragraph", runs });
+    }
+    buffer = [];
+  };
+
+  for (const tok of tokens) {
+    if (tok.type === "image") {
+      flushText();
+      const img = tok as Tokens.Image;
+      blocks.push({
+        kind: "image",
+        src: img.href || "",
+        alt: img.text || "",
+      });
+      continue;
+    }
+    buffer.push(tok);
+  }
+  flushText();
+}
+
+/** Parse Markdown into export-friendly blocks (incl. images). */
 export function parseExportBlocks(markdown: string): ExportBlock[] {
   const cleaned = sanitizeChapterMarkdown(
     markdown.replace(/\r\n/g, "\n").trim() || "",
@@ -92,10 +132,12 @@ export function parseExportBlocks(markdown: string): ExportBlock[] {
     }
     if (token.type === "paragraph") {
       const t = token as Tokens.Paragraph;
-      blocks.push({
-        kind: "paragraph",
-        runs: inlineRuns(t.tokens) || [{ text: t.text }],
-      });
+      pushParagraphOrImages(t.tokens, t.text, blocks);
+      continue;
+    }
+    if (token.type === "image") {
+      const t = token as Tokens.Image;
+      blocks.push({ kind: "image", src: t.href || "", alt: t.text || "" });
       continue;
     }
     if (token.type === "list") {

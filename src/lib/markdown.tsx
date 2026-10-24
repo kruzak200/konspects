@@ -1,12 +1,23 @@
 import { useMemo } from "react";
 import { markdownToHtml, sanitizeChapterMarkdown } from "./markdownCodec";
+import { resolveMarkdownImages } from "./images";
 
-export function ConspectBlocks({ content }: { content: string }) {
+export function ConspectBlocks({
+  content,
+  chapterPath,
+}: {
+  content: string;
+  chapterPath?: string | null;
+}) {
   const trimmed = content.trim();
-  const html = useMemo(
-    () => (trimmed ? markdownToHtml(sanitizeChapterMarkdown(trimmed)) : ""),
-    [trimmed],
-  );
+  const html = useMemo(() => {
+    if (!trimmed) return "";
+    const resolved = resolveMarkdownImages(
+      sanitizeChapterMarkdown(trimmed),
+      chapterPath ?? null,
+    );
+    return markdownToHtml(resolved);
+  }, [trimmed, chapterPath]);
 
   if (!trimmed) {
     return (

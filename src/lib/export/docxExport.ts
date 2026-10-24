@@ -3,6 +3,7 @@ import {
   BorderStyle,
   Document,
   HeadingLevel,
+  ImageRun,
   Packer,
   Paragraph,
   Table,
@@ -12,6 +13,7 @@ import {
   WidthType,
 } from "docx";
 import { parseExportBlocks, type ExportBlock, type InlineRun } from "./model";
+import { docxImageType, resolveExportImage } from "./imageEmbed";
 
 function paragraphFromRuns(runs: InlineRun[], spacingAfter = 160): Paragraph {
   return new Paragraph({
@@ -110,7 +112,10 @@ function tableBlock(block: Extract<ExportBlock, { kind: "table" }>): Table {
   });
 }
 
-function blocksToChildren(blocks: ExportBlock[]): (Paragraph | Table)[] {
+async function blocksToChildren(
+  blocks: ExportBlock[],
+  chapterPath: string | null,
+): Promise<(Paragraph | Table)[]> {
   const out: (Paragraph | Table)[] = [];
   for (const block of blocks) {
     if (block.kind === "heading") {
@@ -131,6 +136,47 @@ function blocksToChildren(blocks: ExportBlock[]): (Paragraph | Table)[] {
     if (block.kind === "table") {
       out.push(tableBlock(block));
       out.push(new Paragraph({ children: [] }));
+      continue;
+    }
+    if (block.kind === "image") {
+      const img = await resolveExportImage(
+        block.src,
+        block.alt,
+        chapterPath,
+      );
+      if (!img) {
+        out.push(
+          paragraphFromRuns([
+            {
+              text: block.alt
+                ? `[картинка не найдена: ${block.alt}]`
+                : "[картинка не найдена]",
+              italic: true,
+            },
+          ]),
+        );
+        continue;
+      }
+      out.push(
+        new Paragraph({
+          spacing: { before: 120, after: 160 },
+          children: [
+            new ImageRun({
+              type: docxImageType(img.mime),
+              data: img.bytes,
+              transformation: {
+                width: img.widthPx,
+                height: img.heightPx,
+              },
+              altText: {
+                title: img.alt,
+                description: img.alt,
+                name: img.alt,
+              },
+            }),
+          ],
+        }),
+      );
     }
   }
   return out;
@@ -138,7 +184,7 @@ function blocksToChildren(blocks: ExportBlock[]): (Paragraph | Table)[] {
 
 export async function buildDocxBytes(
   markdown: string,
-  meta: { subject: string; chapter: string },
+  meta: { subject: string; chapter: string; chapterPath?: string | null },
 ): Promise<Uint8Array> {
   const blocks = parseExportBlocks(markdown);
   const children: (Paragraph | Table)[] = [
@@ -166,7 +212,7 @@ export async function buildDocxBytes(
         }),
       ],
     }),
-    ...blocksToChildren(blocks),
+    ...(await blocksToChildren(blocks, meta.chapterPath ?? null)),
   ];
 
   if (blocks.length === 0) {

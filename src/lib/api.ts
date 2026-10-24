@@ -14,6 +14,8 @@ export type ChapterSnapshot = {
   sections: SectionInfo[];
   activeId: string;
   content: string;
+  /** Absolute chapter folder path (Tauri); empty in browser preview. */
+  chapterPath: string;
 };
 
 const STORAGE_KEY = "konspects-browser-library-v2";
@@ -57,6 +59,17 @@ function plainTitleText(raw: string): string {
   return title;
 }
 
+function isImageOnlyLine(line: string): boolean {
+  const t = line.trim();
+  if (!t) return true;
+  // Markdown image or HTML <img>
+  if (/^!\[[^\]]*\]\([^)]+\)\s*$/.test(t)) return true;
+  if (/^<img\b[^>]*>\s*$/i.test(t)) return true;
+  // Data-URL blob left as first "line" after a bad round-trip
+  if (/^data:image\//i.test(t)) return true;
+  return false;
+}
+
 function autoTitle(content: string): string {
   const mdHeading = content.match(/^#{1,3}\s+(.+)$/m);
   if (mdHeading) {
@@ -72,7 +85,7 @@ function autoTitle(content: string): string {
     content
       .split("\n")
       .map((l) => l.trim())
-      .find((l) => l.length > 0) ?? "";
+      .find((l) => l.length > 0 && !isImageOnlyLine(l)) ?? "";
   const title = plainTitleText(line);
   if (!title) return "Без названия";
   if ([...title].length > 80) return `${[...title].slice(0, 77).join("")}…`;
@@ -97,6 +110,7 @@ function snapshot(ch: BrowserChapter, activeId?: string): ChapterSnapshot {
     sections: ch.sections.map(toInfo),
     activeId: active,
     content: section.content,
+    chapterPath: "",
   };
 }
 

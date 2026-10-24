@@ -444,8 +444,11 @@ export default function App() {
       ? sections.find((s) => s.id === view.sectionId)
       : undefined;
 
+  const isEditingChapter =
+    view.kind === "chapter" && view.mode === "edit";
+
   return (
-    <div className="app-shell">
+    <div className={`app-shell${isEditingChapter ? " is-editing" : ""}`}>
       <div className="atmosphere" aria-hidden="true" />
       <header className="topbar">
         <div className="brand-block">
@@ -627,7 +630,12 @@ export default function App() {
         )}
 
         {view.kind === "chapter" && (
-          <section className="panel chapter-panel chapter-with-sections">
+          <section
+            className={`panel chapter-panel chapter-with-sections${
+              view.mode === "edit" ? " is-edit-session" : ""
+            }`}
+          >
+            <div className="chapter-chrome">
             <nav className="crumbs">
               <button
                 type="button"
@@ -733,6 +741,7 @@ export default function App() {
                   </button>
                 </div>
               )}
+            </div>
             </div>
 
             <div className="chapter-layout">

@@ -24,6 +24,7 @@ import {
   setDocumentAlignOutsideTables,
   setSelectedCellsAlign,
 } from "../lib/tableExtensions";
+import { FixedColumnResize } from "../lib/fixedColumnResize";
 import type { Editor } from "@tiptap/react";
 
 type ImageContext = {
@@ -115,16 +116,17 @@ export function ConspectEditor({
             "Вставьте конспект из Merlin или начните править… Enter — новый абзац. Картинку — кнопкой или Cmd/Ctrl+V.",
         }),
         Table.configure({
-          resizable: true,
-          lastColumnResizable: false,
+          // Built-in columnResizing changes total table width during drag
+          // (preview ≠ commit). We use FixedColumnResize instead.
+          resizable: false,
           cellMinWidth: 48,
-          handleWidth: 6,
           View: FixedEdgeTableViewCtor,
           HTMLAttributes: { class: "conspect-table" },
         }),
         TableRow,
         TableHeader,
         TableCell,
+        FixedColumnResize,
         Image.configure({
           inline: false,
           allowBase64: true,
@@ -414,12 +416,15 @@ export function ConspectEditor({
       </div>
       {inTable && (
         <p className="table-edit-hint">
-          Таблица: тяните внутренние границы столбцов (внешние края не двигаются).
-          Чтобы объединить ячейки — выделите их мышью, затем «Объединить».
+          Таблица: тяните внутренние границы столбцов (внешние края не
+          двигаются). Чтобы объединить ячейки — выделите их мышью, затем
+          «Объединить».
         </p>
       )}
-      <div className="text-column">
-        <EditorContent editor={editor} />
+      <div className="editor-scroll">
+        <div className="text-column">
+          <EditorContent editor={editor} />
+        </div>
       </div>
     </div>
   );

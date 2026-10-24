@@ -100,7 +100,25 @@ fn meta_path(dir: &Path) -> PathBuf {
     dir.join(META_FILE)
 }
 
+fn validate_section_id(id: &str) -> Result<&str, String> {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
+        return Err("Раздел не найден".into());
+    }
+    if trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed.contains('\0')
+        || trimmed.contains("..")
+        || trimmed.starts_with('.')
+    {
+        return Err("Недопустимый идентификатор раздела".into());
+    }
+    Ok(trimmed)
+}
+
 fn section_file(dir: &Path, id: &str) -> PathBuf {
+    // Callers must pass an id that already passed validate_section_id
+    // or came from new_section_id / trusted chapter.json stems.
     dir.join(format!("{id}.md"))
 }
 
@@ -513,7 +531,11 @@ fn open_chapter(
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
     let meta = read_meta(&dir)?;
-    snapshot_for(&dir, &meta, section_id.as_deref())
+    let sid = match section_id.as_deref() {
+        Some(id) if !id.trim().is_empty() => Some(validate_section_id(id)?),
+        _ => None,
+    };
+    snapshot_for(&dir, &meta, sid)
 }
 
 #[tauri::command]
@@ -544,6 +566,7 @@ fn delete_section(
 ) -> Result<ChapterSnapshot, String> {
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
+    let section_id = validate_section_id(&section_id)?.to_string();
     let mut meta = read_meta(&dir)?;
     if meta.sections.len() <= 1 {
         return Err("Нельзя удалить единственный раздел".into());
@@ -553,6 +576,11 @@ fn delete_section(
     }
     meta.sections.retain(|s| s.id != section_id);
     let _ = fs::remove_file(section_file(&dir, &section_id));
+    // Drop image assets for this section (disk hygiene).
+    let assets = dir.join("assets").join(&section_id);
+    if assets.is_dir() {
+        let _ = fs::remove_dir_all(&assets);
+    }
     write_meta(&dir, &meta)?;
     snapshot_for(&dir, &meta, None)
 }
@@ -567,6 +595,7 @@ fn set_section_title(
 ) -> Result<ChapterSnapshot, String> {
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
+    let section_id = validate_section_id(&section_id)?.to_string();
     let mut meta = read_meta(&dir)?;
     let section = meta
         .sections
@@ -592,6 +621,7 @@ fn write_section(
 ) -> Result<ChapterSnapshot, String> {
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
+    let section_id = validate_section_id(&section_id)?.to_string();
     let meta = read_meta(&dir)?;
     if !meta.sections.iter().any(|s| s.id == section_id) {
         return Err("Раздел не найден".into());
@@ -635,6 +665,7 @@ fn save_section_image(
     use base64::Engine;
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
+    let section_id = validate_section_id(&section_id)?.to_string();
     let meta = read_meta(&dir)?;
     if !meta.sections.iter().any(|s| s.id == section_id) {
         return Err("Раздел не найден".into());

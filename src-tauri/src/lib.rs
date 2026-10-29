@@ -117,7 +117,7 @@ fn meta_path(dir: &Path) -> PathBuf {
     dir.join(META_FILE)
 }
 
-fn validate_id(id: &str, kind: &str) -> Result<&str, String> {
+fn validate_id(id: &str, kind: &str) -> Result<String, String> {
     let trimmed = id.trim();
     if trimmed.is_empty() {
         return Err(format!("{kind} не найден"));
@@ -130,7 +130,7 @@ fn validate_id(id: &str, kind: &str) -> Result<&str, String> {
     {
         return Err(format!("Недопустимый идентификатор ({kind})"));
     }
-    Ok(trimmed)
+    Ok(trimmed.to_string())
 }
 
 fn new_id(prefix: &str) -> String {
@@ -728,7 +728,7 @@ fn open_chapter(
         Some(id) if !id.trim().is_empty() => Some(validate_id(id, "Подраздел")?),
         _ => None,
     };
-    snapshot_for(&dir, &meta, sid, uid)
+    snapshot_for(&dir, &meta, sid.as_deref(), uid.as_deref())
 }
 
 #[tauri::command]
@@ -765,7 +765,7 @@ fn delete_section(
 ) -> Result<ChapterSnapshot, String> {
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
-    let section_id = validate_id(&section_id, "Раздел")?.to_string();
+    let section_id = validate_id(&section_id, "Раздел")?;
     let mut meta = ensure_meta_v2(&dir)?;
     if meta.sections.len() <= 1 {
         return Err("Нельзя удалить единственный раздел".into());
@@ -798,7 +798,7 @@ fn set_section_title(
 ) -> Result<ChapterSnapshot, String> {
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
-    let section_id = validate_id(&section_id, "Раздел")?.to_string();
+    let section_id = validate_id(&section_id, "Раздел")?;
     let mut meta = ensure_meta_v2(&dir)?;
     let section = meta
         .sections
@@ -822,7 +822,7 @@ fn create_subsection(
 ) -> Result<ChapterSnapshot, String> {
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
-    let section_id = validate_id(&section_id, "Раздел")?.to_string();
+    let section_id = validate_id(&section_id, "Раздел")?;
     let mut meta = ensure_meta_v2(&dir)?;
     let section = meta
         .sections
@@ -850,8 +850,8 @@ fn delete_subsection(
 ) -> Result<ChapterSnapshot, String> {
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
-    let section_id = validate_id(&section_id, "Раздел")?.to_string();
-    let subsection_id = validate_id(&subsection_id, "Подраздел")?.to_string();
+    let section_id = validate_id(&section_id, "Раздел")?;
+    let subsection_id = validate_id(&subsection_id, "Подраздел")?;
     let mut meta = ensure_meta_v2(&dir)?;
     let section = meta
         .sections
@@ -885,8 +885,8 @@ fn set_subsection_title(
 ) -> Result<ChapterSnapshot, String> {
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
-    let section_id = validate_id(&section_id, "Раздел")?.to_string();
-    let subsection_id = validate_id(&subsection_id, "Подраздел")?.to_string();
+    let section_id = validate_id(&section_id, "Раздел")?;
+    let subsection_id = validate_id(&subsection_id, "Подраздел")?;
     let mut meta = ensure_meta_v2(&dir)?;
     let section = meta
         .sections
@@ -917,8 +917,8 @@ fn write_subsection(
 ) -> Result<ChapterSnapshot, String> {
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
-    let section_id = validate_id(&section_id, "Раздел")?.to_string();
-    let subsection_id = validate_id(&subsection_id, "Подраздел")?.to_string();
+    let section_id = validate_id(&section_id, "Раздел")?;
+    let subsection_id = validate_id(&subsection_id, "Подраздел")?;
     let meta = ensure_meta_v2(&dir)?;
     let section = meta
         .sections
@@ -949,13 +949,13 @@ fn merge_subsections(
 ) -> Result<ChapterSnapshot, String> {
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
-    let section_id = validate_id(&section_id, "Раздел")?.to_string();
+    let section_id = validate_id(&section_id, "Раздел")?;
     if subsection_ids.len() < 2 {
         return Err("Выберите хотя бы два подраздела для объединения".into());
     }
     let mut ids = Vec::new();
     for id in &subsection_ids {
-        ids.push(validate_id(id, "Подраздел")?.to_string());
+        ids.push(validate_id(id, "Подраздел")?);
     }
     let mut meta = ensure_meta_v2(&dir)?;
     let section = meta
@@ -1073,8 +1073,8 @@ fn save_section_image(
     use base64::Engine;
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
-    let section_id = validate_id(&section_id, "Раздел")?.to_string();
-    let subsection_id = validate_id(&subsection_id, "Подраздел")?.to_string();
+    let section_id = validate_id(&section_id, "Раздел")?;
+    let subsection_id = validate_id(&subsection_id, "Подраздел")?;
     let meta = ensure_meta_v2(&dir)?;
     let section = meta
         .sections

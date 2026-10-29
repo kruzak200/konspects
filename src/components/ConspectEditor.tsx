@@ -31,6 +31,7 @@ type ImageContext = {
   subject: string;
   chapter: string;
   sectionId: string;
+  subsectionId: string;
   chapterPath: string | null;
 };
 
@@ -167,6 +168,7 @@ export function ConspectEditor({
                   subject: ctx.subject,
                   chapter: ctx.chapter,
                   sectionId: ctx.sectionId,
+                  subsectionId: ctx.subsectionId,
                   blob: file,
                 });
                 const ed = editorRef.current;
@@ -212,6 +214,7 @@ export function ConspectEditor({
         subject: ctx.subject,
         chapter: ctx.chapter,
         sectionId: ctx.sectionId,
+        subsectionId: ctx.subsectionId,
       });
       if (!saved) return;
       editor

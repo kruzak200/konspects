@@ -4,26 +4,40 @@ export type LibraryInfo = {
   path: string;
 };
 
-export type SectionInfo = {
+export type SubsectionInfo = {
   id: string;
   title: string;
   titleIsCustom: boolean;
 };
 
+export type SectionInfo = {
+  id: string;
+  title: string;
+  titleIsCustom: boolean;
+  subsections: SubsectionInfo[];
+};
+
 export type ChapterSnapshot = {
   sections: SectionInfo[];
-  activeId: string;
+  activeSectionId: string;
+  activeSubsectionId: string;
   content: string;
   /** Absolute chapter folder path (Tauri); empty in browser preview. */
   chapterPath: string;
 };
 
-const STORAGE_KEY = "konspects-browser-library-v2";
+const STORAGE_KEY = "konspects-browser-library-v3";
+
+type BrowserSubsection = {
+  id: string;
+  customTitle: string | null;
+  content: string;
+};
 
 type BrowserSection = {
   id: string;
   customTitle: string | null;
-  content: string;
+  subsections: BrowserSubsection[];
 };
 
 type BrowserChapter = {
@@ -38,8 +52,12 @@ function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-function newId(): string {
+function newSectionId(): string {
   return `s_${Date.now().toString(16)}_${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function newSubsectionId(): string {
+  return `u_${Date.now().toString(16)}_${Math.random().toString(16).slice(2, 8)}`;
 }
 
 function plainTitleText(raw: string): string {
@@ -62,10 +80,8 @@ function plainTitleText(raw: string): string {
 function isImageOnlyLine(line: string): boolean {
   const t = line.trim();
   if (!t) return true;
-  // Markdown image or HTML <img>
   if (/^!\[[^\]]*\]\([^)]+\)\s*$/.test(t)) return true;
   if (/^<img\b[^>]*>\s*$/i.test(t)) return true;
-  // Data-URL blob left as first "line" after a bad round-trip
   if (/^data:image\//i.test(t)) return true;
   return false;
 }
@@ -92,37 +108,118 @@ function autoTitle(content: string): string {
   return title;
 }
 
-function toInfo(s: BrowserSection): SectionInfo {
-  const custom = s.customTitle?.trim();
+function subsectionToInfo(u: BrowserSubsection): SubsectionInfo {
+  const custom = u.customTitle?.trim();
   return {
-    id: s.id,
-    title: custom ? custom : autoTitle(s.content),
+    id: u.id,
+    title: custom ? custom : autoTitle(u.content),
     titleIsCustom: Boolean(custom),
   };
 }
 
-function snapshot(ch: BrowserChapter, activeId?: string): ChapterSnapshot {
-  if (!ch.sections.length) throw new Error("В главе нет разделов");
-  const active =
-    ch.sections.find((s) => s.id === activeId)?.id ?? ch.sections[0].id;
-  const section = ch.sections.find((s) => s.id === active)!;
+function sectionToInfo(s: BrowserSection): SectionInfo {
+  const custom = s.customTitle?.trim();
+  const subsections = s.subsections.map(subsectionToInfo);
+  const titleFromSubs =
+    subsections.map((u) => u.title).find((t) => t && t !== "Без названия") ??
+    "Без названия";
   return {
-    sections: ch.sections.map(toInfo),
-    activeId: active,
-    content: section.content,
+    id: s.id,
+    title: custom ? custom : titleFromSubs,
+    titleIsCustom: Boolean(custom),
+    subsections,
+  };
+}
+
+function snapshot(
+  ch: BrowserChapter,
+  sectionId?: string,
+  subsectionId?: string,
+): ChapterSnapshot {
+  if (!ch.sections.length) throw new Error("В главе нет разделов");
+  const activeSection =
+    ch.sections.find((s) => s.id === sectionId) ?? ch.sections[0];
+  if (!activeSection.subsections.length) {
+    throw new Error("В разделе нет подразделов");
+  }
+  const activeSub =
+    activeSection.subsections.find((u) => u.id === subsectionId) ??
+    activeSection.subsections[0];
+  return {
+    sections: ch.sections.map(sectionToInfo),
+    activeSectionId: activeSection.id,
+    activeSubsectionId: activeSub.id,
+    content: activeSub.content,
     chapterPath: "",
   };
 }
 
 function emptyChapter(): BrowserChapter {
   return {
-    sections: [{ id: newId(), customTitle: null, content: "" }],
+    sections: [
+      {
+        id: newSectionId(),
+        customTitle: null,
+        subsections: [
+          { id: newSubsectionId(), customTitle: null, content: "" },
+        ],
+      },
+    ],
   };
 }
 
-function migrateV1IfNeeded(): void {
+function migrateBrowserStore(): void {
+  if (localStorage.getItem(STORAGE_KEY)) return;
+
+  const v2 = localStorage.getItem("konspects-browser-library-v2");
+  if (v2) {
+    try {
+      const old = JSON.parse(v2) as {
+        subjects: Record<
+          string,
+          Record<
+            string,
+            {
+              sections: {
+                id: string;
+                customTitle: string | null;
+                content: string;
+              }[];
+            }
+          >
+        >;
+      };
+      const next: BrowserStore = { subjects: {} };
+      for (const [subj, chapters] of Object.entries(old.subjects || {})) {
+        next.subjects[subj] = {};
+        for (const [chName, ch] of Object.entries(chapters)) {
+          next.subjects[subj][chName] = {
+            sections: (ch.sections || []).map((s) => ({
+              id: s.id,
+              customTitle: s.customTitle,
+              subsections: [
+                {
+                  id: newSubsectionId(),
+                  customTitle: null,
+                  content: s.content ?? "",
+                },
+              ],
+            })),
+          };
+          if (!next.subjects[subj][chName].sections.length) {
+            next.subjects[subj][chName] = emptyChapter();
+          }
+        }
+      }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      return;
+    } catch {
+      /* fall through */
+    }
+  }
+
   const v1 = localStorage.getItem("konspects-browser-library-v1");
-  if (!v1 || localStorage.getItem(STORAGE_KEY)) return;
+  if (!v1) return;
   try {
     const old = JSON.parse(v1) as {
       subjects: Record<string, Record<string, string>>;
@@ -133,7 +230,17 @@ function migrateV1IfNeeded(): void {
       for (const [chName, content] of Object.entries(chapters)) {
         next.subjects[subj][chName] = {
           sections: [
-            { id: newId(), customTitle: null, content: content ?? "" },
+            {
+              id: newSectionId(),
+              customTitle: null,
+              subsections: [
+                {
+                  id: newSubsectionId(),
+                  customTitle: null,
+                  content: content ?? "",
+                },
+              ],
+            },
           ],
         };
       }
@@ -145,7 +252,7 @@ function migrateV1IfNeeded(): void {
 }
 
 function loadBrowserStore(): BrowserStore {
-  migrateV1IfNeeded();
+  migrateBrowserStore();
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw) as BrowserStore;
@@ -177,6 +284,21 @@ function getChapter(store: BrowserStore, subject: string, chapter: string) {
   const ch = chapters[chapter];
   if (!ch) throw new Error("Глава не найдена");
   return ch;
+}
+
+function findSection(ch: BrowserChapter, sectionId: string): BrowserSection {
+  const section = ch.sections.find((s) => s.id === sectionId);
+  if (!section) throw new Error("Раздел не найден");
+  return section;
+}
+
+function findSubsection(
+  section: BrowserSection,
+  subsectionId: string,
+): BrowserSubsection {
+  const sub = section.subsections.find((u) => u.id === subsectionId);
+  if (!sub) throw new Error("Подраздел не найден");
+  return sub;
 }
 
 export async function getLibraryInfo(): Promise<LibraryInfo> {
@@ -307,16 +429,18 @@ export async function openChapter(
   subject: string,
   chapter: string,
   sectionId?: string | null,
+  subsectionId?: string | null,
 ): Promise<ChapterSnapshot> {
   if (!isTauri()) {
     const store = loadBrowserStore();
     const ch = getChapter(store, subject, chapter);
-    return snapshot(ch, sectionId ?? undefined);
+    return snapshot(ch, sectionId ?? undefined, subsectionId ?? undefined);
   }
   return invoke<ChapterSnapshot>("open_chapter", {
     subject,
     chapter,
     sectionId: sectionId ?? null,
+    subsectionId: subsectionId ?? null,
   });
 }
 
@@ -327,10 +451,15 @@ export async function createSection(
   if (!isTauri()) {
     const store = loadBrowserStore();
     const ch = getChapter(store, subject, chapter);
-    const id = newId();
-    ch.sections.push({ id, customTitle: null, content: "" });
+    const sid = newSectionId();
+    const uid = newSubsectionId();
+    ch.sections.push({
+      id: sid,
+      customTitle: null,
+      subsections: [{ id: uid, customTitle: null, content: "" }],
+    });
     saveBrowserStore(store);
-    return snapshot(ch, id);
+    return snapshot(ch, sid, uid);
   }
   return invoke<ChapterSnapshot>("create_section", { subject, chapter });
 }
@@ -366,10 +495,8 @@ export async function setSectionTitle(
   if (!isTauri()) {
     const store = loadBrowserStore();
     const ch = getChapter(store, subject, chapter);
-    const section = ch.sections.find((s) => s.id === sectionId);
-    if (!section) throw new Error("Раздел не найден");
-    const trimmed = customTitle?.trim() || null;
-    section.customTitle = trimmed;
+    const section = findSection(ch, sectionId);
+    section.customTitle = customTitle?.trim() || null;
     saveBrowserStore(store);
     return snapshot(ch, sectionId);
   }
@@ -381,26 +508,149 @@ export async function setSectionTitle(
   });
 }
 
-export async function writeSection(
+export async function createSubsection(
   subject: string,
   chapter: string,
   sectionId: string,
+): Promise<ChapterSnapshot> {
+  if (!isTauri()) {
+    const store = loadBrowserStore();
+    const ch = getChapter(store, subject, chapter);
+    const section = findSection(ch, sectionId);
+    const uid = newSubsectionId();
+    section.subsections.push({ id: uid, customTitle: null, content: "" });
+    saveBrowserStore(store);
+    return snapshot(ch, sectionId, uid);
+  }
+  return invoke<ChapterSnapshot>("create_subsection", {
+    subject,
+    chapter,
+    sectionId,
+  });
+}
+
+export async function deleteSubsection(
+  subject: string,
+  chapter: string,
+  sectionId: string,
+  subsectionId: string,
+): Promise<ChapterSnapshot> {
+  if (!isTauri()) {
+    const store = loadBrowserStore();
+    const ch = getChapter(store, subject, chapter);
+    const section = findSection(ch, sectionId);
+    if (section.subsections.length <= 1) {
+      throw new Error("Нельзя удалить единственный подраздел");
+    }
+    section.subsections = section.subsections.filter(
+      (u) => u.id !== subsectionId,
+    );
+    saveBrowserStore(store);
+    return snapshot(ch, sectionId);
+  }
+  return invoke<ChapterSnapshot>("delete_subsection", {
+    subject,
+    chapter,
+    sectionId,
+    subsectionId,
+  });
+}
+
+export async function setSubsectionTitle(
+  subject: string,
+  chapter: string,
+  sectionId: string,
+  subsectionId: string,
+  customTitle: string | null,
+): Promise<ChapterSnapshot> {
+  if (!isTauri()) {
+    const store = loadBrowserStore();
+    const ch = getChapter(store, subject, chapter);
+    const section = findSection(ch, sectionId);
+    const sub = findSubsection(section, subsectionId);
+    sub.customTitle = customTitle?.trim() || null;
+    saveBrowserStore(store);
+    return snapshot(ch, sectionId, subsectionId);
+  }
+  return invoke<ChapterSnapshot>("set_subsection_title", {
+    subject,
+    chapter,
+    sectionId,
+    subsectionId,
+    customTitle,
+  });
+}
+
+export async function writeSubsection(
+  subject: string,
+  chapter: string,
+  sectionId: string,
+  subsectionId: string,
   content: string,
 ): Promise<ChapterSnapshot> {
   if (!isTauri()) {
     const store = loadBrowserStore();
     const ch = getChapter(store, subject, chapter);
-    const section = ch.sections.find((s) => s.id === sectionId);
-    if (!section) throw new Error("Раздел не найден");
-    section.content = content;
+    const section = findSection(ch, sectionId);
+    const sub = findSubsection(section, subsectionId);
+    sub.content = content;
     saveBrowserStore(store);
-    return snapshot(ch, sectionId);
+    return snapshot(ch, sectionId, subsectionId);
   }
-  return invoke<ChapterSnapshot>("write_section", {
+  return invoke<ChapterSnapshot>("write_subsection", {
     subject,
     chapter,
     sectionId,
+    subsectionId,
     content,
+  });
+}
+
+export async function mergeSubsections(
+  subject: string,
+  chapter: string,
+  sectionId: string,
+  subsectionIds: string[],
+  customTitle?: string | null,
+): Promise<ChapterSnapshot> {
+  if (!isTauri()) {
+    if (subsectionIds.length < 2) {
+      throw new Error("Выберите хотя бы два подраздела для объединения");
+    }
+    const store = loadBrowserStore();
+    const ch = getChapter(store, subject, chapter);
+    const section = findSection(ch, sectionId);
+    const ordered = subsectionIds.map((id) => findSubsection(section, id));
+    const parts: string[] = [];
+    for (const sub of ordered) {
+      const info = subsectionToInfo(sub);
+      const body = sub.content.trim();
+      if (!body) continue;
+      const heading = `## ${info.title}`;
+      if (
+        body.startsWith(heading) ||
+        body.startsWith(`# ${info.title}`)
+      ) {
+        parts.push(body);
+      } else {
+        parts.push(`${heading}\n\n${body}`);
+      }
+    }
+    const keep = ordered[0];
+    keep.content = parts.join("\n\n");
+    const title = customTitle?.trim();
+    if (title) keep.customTitle = title;
+    const drop = new Set(subsectionIds.slice(1));
+    section.subsections = section.subsections.filter((u) => !drop.has(u.id));
+    saveBrowserStore(store);
+    return snapshot(ch, sectionId, keep.id);
+  }
+  return invoke<ChapterSnapshot>("merge_subsections", {
+    subject,
+    chapter,
+    sectionId,
+    subsectionIds,
+    customTitle: customTitle ?? null,
   });
 }
 
@@ -413,10 +663,17 @@ export async function readChapterExport(
     const ch = getChapter(store, subject, chapter);
     return ch.sections
       .map((s) => {
-        const title = toInfo(s).title;
-        const body = s.content.trim();
-        if (!body) return "";
-        return `# ${title}\n\n${body}`;
+        const sInfo = sectionToInfo(s);
+        const parts = s.subsections
+          .map((u) => {
+            const uInfo = subsectionToInfo(u);
+            const body = u.content.trim();
+            if (!body) return "";
+            return `## ${uInfo.title}\n\n${body}`;
+          })
+          .filter(Boolean);
+        if (!parts.length) return "";
+        return `# ${sInfo.title}\n\n${parts.join("\n\n")}`;
       })
       .filter(Boolean)
       .join("\n\n");

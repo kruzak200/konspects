@@ -65,6 +65,7 @@ async function savePrepared(
   subject: string,
   chapter: string,
   sectionId: string,
+  subsectionId: string,
   prepared: { base64: string; extension: string },
 ): Promise<{ relativePath: string; displaySrc: string }> {
   if (!isTauri()) {
@@ -76,6 +77,7 @@ async function savePrepared(
     subject,
     chapter,
     sectionId,
+    subsectionId,
     dataBase64: prepared.base64,
     extension: prepared.extension,
   });
@@ -85,11 +87,12 @@ async function savePrepared(
   };
 }
 
-/** Open a file picker and save the image into the chapter assets folder. */
+/** Open a file picker and save the image into the subsection assets folder. */
 export async function pickAndSaveImage(opts: {
   subject: string;
   chapter: string;
   sectionId: string;
+  subsectionId: string;
 }): Promise<{ relativePath: string; displaySrc: string } | null> {
   if (!isTauri()) {
     const input = document.createElement("input");
@@ -101,7 +104,13 @@ export async function pickAndSaveImage(opts: {
     });
     if (!file) return null;
     const prepared = await prepareImageBlob(file);
-    return savePrepared(opts.subject, opts.chapter, opts.sectionId, prepared);
+    return savePrepared(
+      opts.subject,
+      opts.chapter,
+      opts.sectionId,
+      opts.subsectionId,
+      prepared,
+    );
   }
 
   const selected = await open({
@@ -120,7 +129,13 @@ export async function pickAndSaveImage(opts: {
   if (!res.ok) throw new Error("Не удалось прочитать файл");
   const blob = await res.blob();
   const prepared = await prepareImageBlob(blob);
-  return savePrepared(opts.subject, opts.chapter, opts.sectionId, prepared);
+  return savePrepared(
+    opts.subject,
+    opts.chapter,
+    opts.sectionId,
+    opts.subsectionId,
+    prepared,
+  );
 }
 
 /** Save a clipboard/pasted image blob into assets. */
@@ -128,10 +143,17 @@ export async function savePastedImage(opts: {
   subject: string;
   chapter: string;
   sectionId: string;
+  subsectionId: string;
   blob: Blob;
 }): Promise<{ relativePath: string; displaySrc: string }> {
   const prepared = await prepareImageBlob(opts.blob);
-  return savePrepared(opts.subject, opts.chapter, opts.sectionId, prepared);
+  return savePrepared(
+    opts.subject,
+    opts.chapter,
+    opts.sectionId,
+    opts.subsectionId,
+    prepared,
+  );
 }
 
 /** Rewrite `assets/…` markdown image URLs for display in the webview. */

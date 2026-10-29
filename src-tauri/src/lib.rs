@@ -7,6 +7,7 @@ use tauri::{AppHandle, Manager};
 
 const LIBRARY_DIR: &str = "Konspects";
 const META_FILE: &str = "chapter.json";
+const META_VERSION: u32 = 2;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,11 +17,21 @@ pub struct LibraryInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SectionMeta {
+struct SubsectionMeta {
     id: String,
-    /// If set, overrides the auto title from the first line of the section file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     custom_title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SectionMeta {
+    id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    custom_title: Option<String>,
+    /// Empty only briefly during migration; always ≥1 after migrate_to_v2.
+    #[serde(default)]
+    subsections: Vec<SubsectionMeta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,7 +43,7 @@ struct ChapterMeta {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SectionInfo {
+pub struct SubsectionInfo {
     pub id: String,
     pub title: String,
     pub title_is_custom: bool,
@@ -40,11 +51,20 @@ pub struct SectionInfo {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SectionInfo {
+    pub id: String,
+    pub title: String,
+    pub title_is_custom: bool,
+    pub subsections: Vec<SubsectionInfo>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChapterSnapshot {
     pub sections: Vec<SectionInfo>,
-    pub active_id: String,
+    pub active_section_id: String,
+    pub active_subsection_id: String,
     pub content: String,
-    /// Absolute path to the chapter folder (for resolving image assets).
     pub chapter_path: String,
 }
 
@@ -82,28 +102,25 @@ fn validate_name(name: &str) -> Result<String, String> {
 }
 
 fn subject_dir(root: &Path, subject: &str) -> Result<PathBuf, String> {
-    let name = validate_name(subject)?;
-    Ok(root.join(name))
+    Ok(root.join(validate_name(subject)?))
 }
 
 fn chapter_dir(root: &Path, subject: &str, chapter: &str) -> Result<PathBuf, String> {
-    let name = validate_name(chapter)?;
-    Ok(subject_dir(root, subject)?.join(name))
+    Ok(subject_dir(root, subject)?.join(validate_name(chapter)?))
 }
 
 fn legacy_chapter_file(root: &Path, subject: &str, chapter: &str) -> Result<PathBuf, String> {
-    let name = validate_name(chapter)?;
-    Ok(subject_dir(root, subject)?.join(format!("{name}.md")))
+    Ok(subject_dir(root, subject)?.join(format!("{}.md", validate_name(chapter)?)))
 }
 
 fn meta_path(dir: &Path) -> PathBuf {
     dir.join(META_FILE)
 }
 
-fn validate_section_id(id: &str) -> Result<&str, String> {
+fn validate_id(id: &str, kind: &str) -> Result<&str, String> {
     let trimmed = id.trim();
     if trimmed.is_empty() {
-        return Err("Раздел не найден".into());
+        return Err(format!("{kind} не найден"));
     }
     if trimmed.contains('/')
         || trimmed.contains('\\')
@@ -111,24 +128,41 @@ fn validate_section_id(id: &str) -> Result<&str, String> {
         || trimmed.contains("..")
         || trimmed.starts_with('.')
     {
-        return Err("Недопустимый идентификатор раздела".into());
+        return Err(format!("Недопустимый идентификатор ({kind})"));
     }
     Ok(trimmed)
 }
 
-fn section_file(dir: &Path, id: &str) -> PathBuf {
-    // Callers must pass an id that already passed validate_section_id
-    // or came from new_section_id / trusted chapter.json stems.
-    dir.join(format!("{id}.md"))
-}
-
-fn new_section_id() -> String {
+fn new_id(prefix: &str) -> String {
     let t = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
     let r: u32 = (t as u32).wrapping_mul(2654435761) ^ (t >> 17) as u32;
-    format!("s_{t:x}_{r:x}")
+    format!("{prefix}_{t:x}_{r:x}")
+}
+
+fn new_section_id() -> String {
+    new_id("s")
+}
+
+fn new_subsection_id() -> String {
+    new_id("u")
+}
+
+fn section_dir(chapter: &Path, section_id: &str) -> PathBuf {
+    chapter.join(section_id)
+}
+
+fn subsection_file(chapter: &Path, section_id: &str, subsection_id: &str) -> PathBuf {
+    section_dir(chapter, section_id).join(format!("{subsection_id}.md"))
+}
+
+fn subsection_assets_dir(chapter: &Path, section_id: &str, subsection_id: &str) -> PathBuf {
+    chapter
+        .join("assets")
+        .join(section_id)
+        .join(subsection_id)
 }
 
 fn strip_simple_markup(s: &str) -> String {
@@ -183,7 +217,6 @@ fn is_image_only_line(line: &str) -> bool {
 }
 
 fn auto_title_from_content(content: &str) -> String {
-    // Markdown ATX heading near the top
     for line in content.lines().take(12) {
         let trimmed = line.trim();
         if is_image_only_line(trimmed) {
@@ -200,7 +233,6 @@ fn auto_title_from_content(content: &str) -> String {
             }
         }
     }
-    // HTML heading block (may span lines after justify save)
     if let Some(start) = content.find("<h") {
         let slice = &content[start..];
         if let Some(open_end) = slice.find('>') {
@@ -255,8 +287,125 @@ fn write_meta(dir: &Path, meta: &ChapterMeta) -> Result<(), String> {
     fs::write(&path, raw).map_err(|e| format!("Не удалось сохранить главу: {e}"))
 }
 
+fn rewrite_asset_paths(content: &str, section_id: &str, subsection_id: &str) -> String {
+    let old = format!("assets/{section_id}/");
+    let new = format!("assets/{section_id}/{subsection_id}/");
+    content.replace(&old, &new)
+}
+
+/// Migrate v1 flat `s_….md` (+ `assets/s_…/`) into section folders + subsections.
+fn migrate_to_v2(dir: &Path, meta: &mut ChapterMeta) -> Result<(), String> {
+    if meta.version >= META_VERSION
+        && meta
+            .sections
+            .iter()
+            .all(|s| !s.subsections.is_empty())
+    {
+        return Ok(());
+    }
+
+    for section in &mut meta.sections {
+        if !section.subsections.is_empty() {
+            // Ensure folder layout exists for already-migrated entries.
+            ensure_dir(&section_dir(dir, &section.id))?;
+            continue;
+        }
+
+        let legacy_md = dir.join(format!("{}.md", section.id));
+        let content = if legacy_md.is_file() {
+            fs::read_to_string(&legacy_md).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        let uid = new_subsection_id();
+        ensure_dir(&section_dir(dir, &section.id))?;
+
+        // Move legacy assets/s_xxx/* → assets/s_xxx/u_yyy/*
+        let old_assets = dir.join("assets").join(&section.id);
+        let new_assets = subsection_assets_dir(dir, &section.id, &uid);
+        let mut body = content;
+        if old_assets.is_dir() {
+            // If old_assets already has subsection folders, leave as-is.
+            let has_subdirs = fs::read_dir(&old_assets)
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok()).any(|e| {
+                        e.path().is_dir()
+                            && e.file_name()
+                                .to_str()
+                                .map(|n| n.starts_with('u'))
+                                .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
+            if !has_subdirs {
+                ensure_dir(&new_assets)?;
+                for entry in fs::read_dir(&old_assets).map_err(|e| e.to_string())? {
+                    let entry = entry.map_err(|e| e.to_string())?;
+                    let path = entry.path();
+                    if path.is_file() {
+                        let name = entry.file_name();
+                        let dest = new_assets.join(&name);
+                        let _ = fs::rename(&path, &dest);
+                    }
+                }
+                body = rewrite_asset_paths(&body, &section.id, &uid);
+            }
+        }
+
+        fs::write(subsection_file(dir, &section.id, &uid), &body)
+            .map_err(|e| format!("Не удалось перенести раздел: {e}"))?;
+        if legacy_md.is_file() {
+            let _ = fs::remove_file(&legacy_md);
+        }
+
+        section.subsections.push(SubsectionMeta {
+            id: uid,
+            custom_title: None,
+        });
+    }
+
+    meta.version = META_VERSION;
+    write_meta(dir, meta)?;
+    Ok(())
+}
+
+fn ensure_meta_v2(dir: &Path) -> Result<ChapterMeta, String> {
+    let mut meta = read_meta(dir)?;
+    migrate_to_v2(dir, &mut meta)?;
+    // Re-read in case migrate wrote; keep in-memory meta which is current.
+    Ok(meta)
+}
+
+fn subsection_info(
+    dir: &Path,
+    section_id: &str,
+    sub: &SubsectionMeta,
+) -> Result<SubsectionInfo, String> {
+    let content =
+        fs::read_to_string(subsection_file(dir, section_id, &sub.id)).unwrap_or_default();
+    let title_is_custom = sub
+        .custom_title
+        .as_ref()
+        .map(|t| !t.trim().is_empty())
+        .unwrap_or(false);
+    let title = if title_is_custom {
+        sub.custom_title.as_ref().unwrap().trim().to_string()
+    } else {
+        auto_title_from_content(&content)
+    };
+    Ok(SubsectionInfo {
+        id: sub.id.clone(),
+        title,
+        title_is_custom,
+    })
+}
+
 fn section_info(dir: &Path, meta: &SectionMeta) -> Result<SectionInfo, String> {
-    let content = fs::read_to_string(section_file(dir, &meta.id)).unwrap_or_default();
+    let mut subs = Vec::new();
+    for sub in &meta.subsections {
+        subs.push(subsection_info(dir, &meta.id, sub)?);
+    }
     let title_is_custom = meta
         .custom_title
         .as_ref()
@@ -264,13 +413,16 @@ fn section_info(dir: &Path, meta: &SectionMeta) -> Result<SectionInfo, String> {
         .unwrap_or(false);
     let title = if title_is_custom {
         meta.custom_title.as_ref().unwrap().trim().to_string()
+    } else if let Some(first) = subs.first() {
+        first.title.clone()
     } else {
-        auto_title_from_content(&content)
+        "Без названия".into()
     };
     Ok(SectionInfo {
         id: meta.id.clone(),
         title,
         title_is_custom,
+        subsections: subs,
     })
 }
 
@@ -279,26 +431,32 @@ fn create_empty_chapter_folder(dir: &Path) -> Result<ChapterMeta, String> {
         return Err("Такая глава уже есть".into());
     }
     ensure_dir(dir)?;
-    let id = new_section_id();
-    fs::write(section_file(dir, &id), "").map_err(|e| e.to_string())?;
+    let sid = new_section_id();
+    let uid = new_subsection_id();
+    ensure_dir(&section_dir(dir, &sid))?;
+    fs::write(subsection_file(dir, &sid, &uid), "").map_err(|e| e.to_string())?;
     let meta = ChapterMeta {
-        version: 1,
+        version: META_VERSION,
         sections: vec![SectionMeta {
-            id,
+            id: sid,
             custom_title: None,
+            subsections: vec![SubsectionMeta {
+                id: uid,
+                custom_title: None,
+            }],
         }],
     };
     write_meta(dir, &meta)?;
     Ok(meta)
 }
 
-/// Turn a legacy `Глава.md` into `Глава/` with one section. Idempotent if folder exists.
 fn ensure_chapter_folder(root: &Path, subject: &str, chapter: &str) -> Result<PathBuf, String> {
     let dir = chapter_dir(root, subject, chapter)?;
     let legacy = legacy_chapter_file(root, subject, chapter)?;
 
     if dir.is_dir() && meta_path(&dir).exists() {
-        // Folder chapter already OK; if a leftover .md exists, leave it (user can delete).
+        let mut meta = read_meta(&dir)?;
+        migrate_to_v2(&dir, &mut meta)?;
         return Ok(dir);
     }
 
@@ -310,13 +468,19 @@ fn ensure_chapter_folder(root: &Path, subject: &str, chapter: &str) -> Result<Pa
         }
         let content = fs::read_to_string(&legacy).map_err(|e| e.to_string())?;
         ensure_dir(&dir)?;
-        let id = new_section_id();
-        fs::write(section_file(&dir, &id), content).map_err(|e| e.to_string())?;
+        let sid = new_section_id();
+        let uid = new_subsection_id();
+        ensure_dir(&section_dir(&dir, &sid))?;
+        fs::write(subsection_file(&dir, &sid, &uid), content).map_err(|e| e.to_string())?;
         let meta = ChapterMeta {
-            version: 1,
+            version: META_VERSION,
             sections: vec![SectionMeta {
-                id,
+                id: sid,
                 custom_title: None,
+                subsections: vec![SubsectionMeta {
+                    id: uid,
+                    custom_title: None,
+                }],
             }],
         };
         write_meta(&dir, &meta)?;
@@ -325,7 +489,6 @@ fn ensure_chapter_folder(root: &Path, subject: &str, chapter: &str) -> Result<Pa
     }
 
     if dir.is_dir() {
-        // Folder without meta — repair with existing .md files or one empty section
         let mut sections = Vec::new();
         for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
@@ -336,23 +499,37 @@ fn ensure_chapter_folder(root: &Path, subject: &str, chapter: &str) -> Result<Pa
                     sections.push(SectionMeta {
                         id: stem.to_string(),
                         custom_title: None,
+                        subsections: vec![],
                     });
                 }
             }
         }
         if sections.is_empty() {
-            let id = new_section_id();
-            fs::write(section_file(&dir, &id), "").map_err(|e| e.to_string())?;
+            let sid = new_section_id();
+            let uid = new_subsection_id();
+            ensure_dir(&section_dir(&dir, &sid))?;
+            fs::write(subsection_file(&dir, &sid, &uid), "").map_err(|e| e.to_string())?;
             sections.push(SectionMeta {
-                id,
+                id: sid,
                 custom_title: None,
+                subsections: vec![SubsectionMeta {
+                    id: uid,
+                    custom_title: None,
+                }],
             });
+            let meta = ChapterMeta {
+                version: META_VERSION,
+                sections,
+            };
+            write_meta(&dir, &meta)?;
+        } else {
+            let mut meta = ChapterMeta {
+                version: 1,
+                sections,
+            };
+            write_meta(&dir, &meta)?;
+            migrate_to_v2(&dir, &mut meta)?;
         }
-        let meta = ChapterMeta {
-            version: 1,
-            sections,
-        };
-        write_meta(&dir, &meta)?;
         return Ok(dir);
     }
 
@@ -368,7 +545,8 @@ fn chapter_exists(root: &Path, subject: &str, chapter: &str) -> Result<bool, Str
 fn snapshot_for(
     dir: &Path,
     meta: &ChapterMeta,
-    active_id: Option<&str>,
+    section_id: Option<&str>,
+    subsection_id: Option<&str>,
 ) -> Result<ChapterSnapshot, String> {
     if meta.sections.is_empty() {
         return Err("В главе нет разделов".into());
@@ -377,15 +555,28 @@ fn snapshot_for(
     for s in &meta.sections {
         infos.push(section_info(dir, s)?);
     }
-    let active = active_id
+    let active_section = section_id
         .filter(|id| meta.sections.iter().any(|s| s.id == *id))
         .unwrap_or(&meta.sections[0].id)
         .to_string();
-    let content = fs::read_to_string(section_file(dir, &active))
-        .map_err(|e| format!("Не удалось прочитать раздел: {e}"))?;
+    let section = meta
+        .sections
+        .iter()
+        .find(|s| s.id == active_section)
+        .ok_or_else(|| "Раздел не найден".to_string())?;
+    if section.subsections.is_empty() {
+        return Err("В разделе нет подразделов".into());
+    }
+    let active_sub = subsection_id
+        .filter(|id| section.subsections.iter().any(|u| u.id == *id))
+        .unwrap_or(&section.subsections[0].id)
+        .to_string();
+    let content = fs::read_to_string(subsection_file(dir, &active_section, &active_sub))
+        .map_err(|e| format!("Не удалось прочитать подраздел: {e}"))?;
     Ok(ChapterSnapshot {
         sections: infos,
-        active_id: active,
+        active_section_id: active_section,
+        active_subsection_id: active_sub,
         content,
         chapter_path: dir.to_string_lossy().into_owned(),
     })
@@ -515,9 +706,6 @@ fn delete_chapter(app: AppHandle, subject: String, name: String) -> Result<(), S
     if legacy.is_file() {
         fs::remove_file(&legacy).map_err(|e| format!("Не удалось удалить: {e}"))?;
     }
-    if !dir.exists() && !legacy.exists() {
-        // ok if one form existed
-    }
     Ok(())
 }
 
@@ -527,15 +715,20 @@ fn open_chapter(
     subject: String,
     chapter: String,
     section_id: Option<String>,
+    subsection_id: Option<String>,
 ) -> Result<ChapterSnapshot, String> {
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
-    let meta = read_meta(&dir)?;
+    let meta = ensure_meta_v2(&dir)?;
     let sid = match section_id.as_deref() {
-        Some(id) if !id.trim().is_empty() => Some(validate_section_id(id)?),
+        Some(id) if !id.trim().is_empty() => Some(validate_id(id, "Раздел")?),
         _ => None,
     };
-    snapshot_for(&dir, &meta, sid)
+    let uid = match subsection_id.as_deref() {
+        Some(id) if !id.trim().is_empty() => Some(validate_id(id, "Подраздел")?),
+        _ => None,
+    };
+    snapshot_for(&dir, &meta, sid, uid)
 }
 
 #[tauri::command]
@@ -546,15 +739,21 @@ fn create_section(
 ) -> Result<ChapterSnapshot, String> {
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
-    let mut meta = read_meta(&dir)?;
-    let id = new_section_id();
-    fs::write(section_file(&dir, &id), "").map_err(|e| e.to_string())?;
+    let mut meta = ensure_meta_v2(&dir)?;
+    let sid = new_section_id();
+    let uid = new_subsection_id();
+    ensure_dir(&section_dir(&dir, &sid))?;
+    fs::write(subsection_file(&dir, &sid, &uid), "").map_err(|e| e.to_string())?;
     meta.sections.push(SectionMeta {
-        id: id.clone(),
+        id: sid.clone(),
         custom_title: None,
+        subsections: vec![SubsectionMeta {
+            id: uid.clone(),
+            custom_title: None,
+        }],
     });
     write_meta(&dir, &meta)?;
-    snapshot_for(&dir, &meta, Some(&id))
+    snapshot_for(&dir, &meta, Some(&sid), Some(&uid))
 }
 
 #[tauri::command]
@@ -566,8 +765,8 @@ fn delete_section(
 ) -> Result<ChapterSnapshot, String> {
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
-    let section_id = validate_section_id(&section_id)?.to_string();
-    let mut meta = read_meta(&dir)?;
+    let section_id = validate_id(&section_id, "Раздел")?.to_string();
+    let mut meta = ensure_meta_v2(&dir)?;
     if meta.sections.len() <= 1 {
         return Err("Нельзя удалить единственный раздел".into());
     }
@@ -575,14 +774,18 @@ fn delete_section(
         return Err("Раздел не найден".into());
     }
     meta.sections.retain(|s| s.id != section_id);
-    let _ = fs::remove_file(section_file(&dir, &section_id));
-    // Drop image assets for this section (disk hygiene).
+    let sdir = section_dir(&dir, &section_id);
+    if sdir.is_dir() {
+        let _ = fs::remove_dir_all(&sdir);
+    }
+    let legacy = dir.join(format!("{section_id}.md"));
+    let _ = fs::remove_file(legacy);
     let assets = dir.join("assets").join(&section_id);
     if assets.is_dir() {
         let _ = fs::remove_dir_all(&assets);
     }
     write_meta(&dir, &meta)?;
-    snapshot_for(&dir, &meta, None)
+    snapshot_for(&dir, &meta, None, None)
 }
 
 #[tauri::command]
@@ -595,40 +798,236 @@ fn set_section_title(
 ) -> Result<ChapterSnapshot, String> {
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
-    let section_id = validate_section_id(&section_id)?.to_string();
-    let mut meta = read_meta(&dir)?;
+    let section_id = validate_id(&section_id, "Раздел")?.to_string();
+    let mut meta = ensure_meta_v2(&dir)?;
     let section = meta
         .sections
         .iter_mut()
         .find(|s| s.id == section_id)
         .ok_or_else(|| "Раздел не найден".to_string())?;
-    let trimmed = custom_title
+    section.custom_title = custom_title
         .as_ref()
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty());
-    section.custom_title = trimmed;
     write_meta(&dir, &meta)?;
-    snapshot_for(&dir, &meta, Some(&section_id))
+    snapshot_for(&dir, &meta, Some(&section_id), None)
 }
 
 #[tauri::command]
-fn write_section(
+fn create_subsection(
     app: AppHandle,
     subject: String,
     chapter: String,
     section_id: String,
+) -> Result<ChapterSnapshot, String> {
+    let root = library_root(&app)?;
+    let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
+    let section_id = validate_id(&section_id, "Раздел")?.to_string();
+    let mut meta = ensure_meta_v2(&dir)?;
+    let section = meta
+        .sections
+        .iter_mut()
+        .find(|s| s.id == section_id)
+        .ok_or_else(|| "Раздел не найден".to_string())?;
+    let uid = new_subsection_id();
+    ensure_dir(&section_dir(&dir, &section_id))?;
+    fs::write(subsection_file(&dir, &section_id, &uid), "").map_err(|e| e.to_string())?;
+    section.subsections.push(SubsectionMeta {
+        id: uid.clone(),
+        custom_title: None,
+    });
+    write_meta(&dir, &meta)?;
+    snapshot_for(&dir, &meta, Some(&section_id), Some(&uid))
+}
+
+#[tauri::command]
+fn delete_subsection(
+    app: AppHandle,
+    subject: String,
+    chapter: String,
+    section_id: String,
+    subsection_id: String,
+) -> Result<ChapterSnapshot, String> {
+    let root = library_root(&app)?;
+    let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
+    let section_id = validate_id(&section_id, "Раздел")?.to_string();
+    let subsection_id = validate_id(&subsection_id, "Подраздел")?.to_string();
+    let mut meta = ensure_meta_v2(&dir)?;
+    let section = meta
+        .sections
+        .iter_mut()
+        .find(|s| s.id == section_id)
+        .ok_or_else(|| "Раздел не найден".to_string())?;
+    if section.subsections.len() <= 1 {
+        return Err("Нельзя удалить единственный подраздел".into());
+    }
+    if !section.subsections.iter().any(|u| u.id == subsection_id) {
+        return Err("Подраздел не найден".into());
+    }
+    section.subsections.retain(|u| u.id != subsection_id);
+    let _ = fs::remove_file(subsection_file(&dir, &section_id, &subsection_id));
+    let assets = subsection_assets_dir(&dir, &section_id, &subsection_id);
+    if assets.is_dir() {
+        let _ = fs::remove_dir_all(&assets);
+    }
+    write_meta(&dir, &meta)?;
+    snapshot_for(&dir, &meta, Some(&section_id), None)
+}
+
+#[tauri::command]
+fn set_subsection_title(
+    app: AppHandle,
+    subject: String,
+    chapter: String,
+    section_id: String,
+    subsection_id: String,
+    custom_title: Option<String>,
+) -> Result<ChapterSnapshot, String> {
+    let root = library_root(&app)?;
+    let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
+    let section_id = validate_id(&section_id, "Раздел")?.to_string();
+    let subsection_id = validate_id(&subsection_id, "Подраздел")?.to_string();
+    let mut meta = ensure_meta_v2(&dir)?;
+    let section = meta
+        .sections
+        .iter_mut()
+        .find(|s| s.id == section_id)
+        .ok_or_else(|| "Раздел не найден".to_string())?;
+    let sub = section
+        .subsections
+        .iter_mut()
+        .find(|u| u.id == subsection_id)
+        .ok_or_else(|| "Подраздел не найден".to_string())?;
+    sub.custom_title = custom_title
+        .as_ref()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
+    write_meta(&dir, &meta)?;
+    snapshot_for(&dir, &meta, Some(&section_id), Some(&subsection_id))
+}
+
+#[tauri::command]
+fn write_subsection(
+    app: AppHandle,
+    subject: String,
+    chapter: String,
+    section_id: String,
+    subsection_id: String,
     content: String,
 ) -> Result<ChapterSnapshot, String> {
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
-    let section_id = validate_section_id(&section_id)?.to_string();
-    let meta = read_meta(&dir)?;
-    if !meta.sections.iter().any(|s| s.id == section_id) {
-        return Err("Раздел не найден".into());
+    let section_id = validate_id(&section_id, "Раздел")?.to_string();
+    let subsection_id = validate_id(&subsection_id, "Подраздел")?.to_string();
+    let meta = ensure_meta_v2(&dir)?;
+    let section = meta
+        .sections
+        .iter()
+        .find(|s| s.id == section_id)
+        .ok_or_else(|| "Раздел не найден".to_string())?;
+    if !section.subsections.iter().any(|u| u.id == subsection_id) {
+        return Err("Подраздел не найден".into());
     }
-    fs::write(section_file(&dir, &section_id), content)
-        .map_err(|e| format!("Не удалось сохранить: {e}"))?;
-    snapshot_for(&dir, &meta, Some(&section_id))
+    ensure_dir(&section_dir(&dir, &section_id))?;
+    fs::write(
+        subsection_file(&dir, &section_id, &subsection_id),
+        content,
+    )
+    .map_err(|e| format!("Не удалось сохранить: {e}"))?;
+    snapshot_for(&dir, &meta, Some(&section_id), Some(&subsection_id))
+}
+
+/// Merge selected subsections (in order) into the first; delete the rest.
+#[tauri::command]
+fn merge_subsections(
+    app: AppHandle,
+    subject: String,
+    chapter: String,
+    section_id: String,
+    subsection_ids: Vec<String>,
+    custom_title: Option<String>,
+) -> Result<ChapterSnapshot, String> {
+    let root = library_root(&app)?;
+    let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
+    let section_id = validate_id(&section_id, "Раздел")?.to_string();
+    if subsection_ids.len() < 2 {
+        return Err("Выберите хотя бы два подраздела для объединения".into());
+    }
+    let mut ids = Vec::new();
+    for id in &subsection_ids {
+        ids.push(validate_id(id, "Подраздел")?.to_string());
+    }
+    let mut meta = ensure_meta_v2(&dir)?;
+    let section = meta
+        .sections
+        .iter_mut()
+        .find(|s| s.id == section_id)
+        .ok_or_else(|| "Раздел не найден".to_string())?;
+
+    for id in &ids {
+        if !section.subsections.iter().any(|u| u.id == *id) {
+            return Err(format!("Подраздел «{id}» не найден"));
+        }
+    }
+
+    let mut parts = Vec::new();
+    for id in &ids {
+        let sub = section.subsections.iter().find(|u| u.id == *id).unwrap();
+        let info = subsection_info(&dir, &section_id, sub)?;
+        let body = fs::read_to_string(subsection_file(&dir, &section_id, id)).unwrap_or_default();
+        let body = body.trim();
+        if body.is_empty() {
+            continue;
+        }
+        // Avoid duplicating title if body already starts with same heading
+        let heading = format!("## {}", info.title);
+        if body.starts_with(&heading) || body.starts_with(&format!("# {}", info.title)) {
+            parts.push(body.to_string());
+        } else {
+            parts.push(format!("{heading}\n\n{body}"));
+        }
+    }
+    let merged = parts.join("\n\n");
+    let keep_id = ids[0].clone();
+    fs::write(subsection_file(&dir, &section_id, &keep_id), merged)
+        .map_err(|e| format!("Не удалось сохранить объединённый текст: {e}"))?;
+
+    // Merge asset folders into keep_id (best-effort rename with prefix)
+    for id in ids.iter().skip(1) {
+        let from = subsection_assets_dir(&dir, &section_id, id);
+        let to = subsection_assets_dir(&dir, &section_id, &keep_id);
+        if from.is_dir() {
+            ensure_dir(&to)?;
+            if let Ok(rd) = fs::read_dir(&from) {
+                for entry in rd.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        let name = entry.file_name();
+                        let dest = to.join(format!(
+                            "from_{}_{}",
+                            id,
+                            name.to_string_lossy()
+                        ));
+                        let _ = fs::rename(&path, dest);
+                    }
+                }
+            }
+            let _ = fs::remove_dir_all(&from);
+        }
+        let _ = fs::remove_file(subsection_file(&dir, &section_id, id));
+    }
+
+    section.subsections.retain(|u| !ids[1..].contains(&u.id));
+    if let Some(keep) = section.subsections.iter_mut().find(|u| u.id == keep_id) {
+        keep.custom_title = custom_title
+            .as_ref()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .or_else(|| keep.custom_title.clone());
+    }
+
+    write_meta(&dir, &meta)?;
+    snapshot_for(&dir, &meta, Some(&section_id), Some(&keep_id))
 }
 
 #[tauri::command]
@@ -639,36 +1038,51 @@ fn read_chapter_export(
 ) -> Result<String, String> {
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
-    let meta = read_meta(&dir)?;
+    let meta = ensure_meta_v2(&dir)?;
     let mut parts = Vec::new();
     for s in &meta.sections {
-        let info = section_info(&dir, s)?;
-        let body = fs::read_to_string(section_file(&dir, &s.id)).unwrap_or_default();
-        if body.trim().is_empty() {
+        let sinfo = section_info(&dir, s)?;
+        let mut section_parts = Vec::new();
+        for sub in &s.subsections {
+            let uinfo = subsection_info(&dir, &s.id, sub)?;
+            let body =
+                fs::read_to_string(subsection_file(&dir, &s.id, &sub.id)).unwrap_or_default();
+            if body.trim().is_empty() {
+                continue;
+            }
+            section_parts.push(format!("## {}\n\n{}", uinfo.title, body.trim()));
+        }
+        if section_parts.is_empty() {
             continue;
         }
-        parts.push(format!("# {}\n\n{}", info.title, body.trim()));
+        parts.push(format!("# {}\n\n{}", sinfo.title, section_parts.join("\n\n")));
     }
     Ok(parts.join("\n\n"))
 }
 
-/// Save an image into `Глава/assets/<section_id>/…` and return relative + absolute paths.
 #[tauri::command]
 fn save_section_image(
     app: AppHandle,
     subject: String,
     chapter: String,
     section_id: String,
+    subsection_id: String,
     data_base64: String,
     extension: String,
 ) -> Result<SavedImage, String> {
     use base64::Engine;
     let root = library_root(&app)?;
     let dir = ensure_chapter_folder(&root, &subject, &chapter)?;
-    let section_id = validate_section_id(&section_id)?.to_string();
-    let meta = read_meta(&dir)?;
-    if !meta.sections.iter().any(|s| s.id == section_id) {
-        return Err("Раздел не найден".into());
+    let section_id = validate_id(&section_id, "Раздел")?.to_string();
+    let subsection_id = validate_id(&subsection_id, "Подраздел")?.to_string();
+    let meta = ensure_meta_v2(&dir)?;
+    let section = meta
+        .sections
+        .iter()
+        .find(|s| s.id == section_id)
+        .ok_or_else(|| "Раздел не найден".to_string())?;
+    if !section.subsections.iter().any(|u| u.id == subsection_id) {
+        return Err("Подраздел не найден".into());
     }
     let ext = extension.trim().trim_start_matches('.').to_lowercase();
     let allowed = ["png", "jpg", "jpeg", "webp", "gif"];
@@ -681,11 +1095,10 @@ fn save_section_image(
     if bytes.is_empty() {
         return Err("Пустое изображение".into());
     }
-    // Hard cap after client-side resize (~8 MiB)
     if bytes.len() > 8 * 1024 * 1024 {
         return Err("Файл слишком большой (макс. ~8 МБ после сжатия)".into());
     }
-    let assets = dir.join("assets").join(&section_id);
+    let assets = subsection_assets_dir(&dir, &section_id, &subsection_id);
     ensure_dir(&assets)?;
     let t = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -694,14 +1107,13 @@ fn save_section_image(
     let filename = format!("img_{t:x}.{ext}");
     let abs = assets.join(&filename);
     fs::write(&abs, &bytes).map_err(|e| format!("Не удалось сохранить картинку: {e}"))?;
-    let relative_path = format!("assets/{section_id}/{filename}");
+    let relative_path = format!("assets/{section_id}/{subsection_id}/{filename}");
     Ok(SavedImage {
         relative_path,
         absolute_path: abs.to_string_lossy().into_owned(),
     })
 }
 
-/// Write an exported file (DOCX/PDF) chosen via the native save dialog.
 #[tauri::command]
 fn write_export_file(path: String, data_base64: String) -> Result<(), String> {
     use base64::Engine;
@@ -742,7 +1154,11 @@ pub fn run() {
             create_section,
             delete_section,
             set_section_title,
-            write_section,
+            create_subsection,
+            delete_subsection,
+            set_subsection_title,
+            write_subsection,
+            merge_subsections,
             read_chapter_export,
             save_section_image,
             write_export_file,
